@@ -9,12 +9,14 @@
   --text: #f3eef6;
   --text-muted: #aca1b8;
   --text-faint: #7a6f88;
-  --accent: #b69cff;          /* purple: the lead brand colour */
-  --accent-strong: #9d7bff;
-  --accent-ink: #1a1030;
-  --coral: #ff7f6e;
-  --peach: #ffc9a8;
-  --teal: #5eead4;            /* the hint: live data only */
+  /* Brand palette: purple #542783, coral #ED817C, peach #FFD4BD, teal #5BB9B2.
+     On the dark background the purple is lifted so text stays readable. */
+  --accent: #a77fd8;
+  --accent-strong: #8d5fc9;
+  --accent-ink: #1a0f2b;
+  --coral: #ed817c;
+  --peach: #ffd4bd;
+  --teal: #5bb9b2;            /* the hint: live data only */
   --pass: #4ade80;   --pass-bg: rgba(74, 222, 128, 0.12);
   --fail: #f2557a;   --fail-bg: rgba(242, 85, 122, 0.13);
   --warn: #fbbf24;   --warn-bg: rgba(251, 191, 36, 0.12);
@@ -36,12 +38,12 @@
   --text: #1e1628;
   --text-muted: #625874;
   --text-faint: #91879d;
-  --accent: #6b3fd4;
-  --accent-strong: #5530b0;
+  --accent: #542783;
+  --accent-strong: #3f1d63;
   --accent-ink: #ffffff;
-  --coral: #e5604e;
-  --peach: #f4a878;
-  --teal: #0f766e;
+  --coral: #ed817c;
+  --peach: #f3b291;
+  --teal: #2f8f88;
   --pass: #15803d;   --pass-bg: #dcfce7;
   --fail: #be123c;   --fail-bg: #ffe4e6;
   --warn: #a16207;   --warn-bg: #fef3c7;
@@ -201,3 +203,27 @@ pre { background: var(--bg-sunken); border: 1px solid var(--border); border-radi
 .tiles .tile:nth-child(3) { border-top-color: color-mix(in srgb, var(--peach) 60%, transparent); }
 .tiles .tile:nth-child(4) { border-top-color: color-mix(in srgb, var(--teal) 55%, transparent); }
 .shell, .auth { position: relative; z-index: 1; }
+
+/* ---------- Phoenix background (artwork: web/phoenix-*.webp) ---------- */
+.phoenix-bg {
+  position: fixed; inset: -6%; z-index: 0; pointer-events: none;
+  background: url("phoenix-dark.webp") 62% 45% / cover no-repeat;
+  opacity: 0.16; transform-origin: 60% 50%;
+  animation: phoenix-glide 12s ease-in-out infinite alternate;
+}
+:root[data-theme="light"] .phoenix-bg { background-image: url("phoenix-light.webp"); opacity: 0.3; }
+/* The sign-in page shows the phoenix in full */
+body:has(.auth) .phoenix-bg { opacity: 0.95; }
+:root[data-theme="light"] body:has(.auth) .phoenix-bg { opacity: 1; }
+body:has(.auth) .auth-side { background: linear-gradient(90deg, color-mix(in srgb, var(--bg-sunken) 92%, transparent) 0%, color-mix(in srgb, var(--bg-sunken) 70%, transparent) 75%, transparent 100%); border-right: 0; }
+.auth-form .card { background: color-mix(in srgb, var(--bg-raised) 58%, transparent); -webkit-backdrop-filter: blur(6px); backdrop-filter: blur(6px); }
+@keyframes phoenix-glide {
+  0%   { transform: translate(-1.4%, 1.5%) scale(1.02) rotate(-1deg); filter: brightness(1); }
+  50%  { filter: brightness(1.14); }
+  100% { transform: translate(1.4%, -1.5%) scale(1.07) rotate(1deg); filter: brightness(1.05); }
+}
+/* If the computer asks for reduced motion, the phoenix only glows gently */
+@media (prefers-reduced-motion: reduce) {
+  .phoenix-bg { animation: phoenix-breathe 8s ease-in-out infinite alternate; }
+  @keyframes phoenix-breathe { from { filter: brightness(0.92); } to { filter: brightness(1.12); } }
+}

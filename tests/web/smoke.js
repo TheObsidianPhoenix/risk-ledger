@@ -19,7 +19,7 @@ const jwt = (aal) => `${b64({ alg: "none" })}.${b64({ sub: "00000000-0000-0000-0
 const QR = "data:image/svg+xml;utf8," + encodeURIComponent('<svg xmlns="http://www.w3.org/2000/svg" width="10" height="10"><rect width="10" height="10"/></svg>');
 
 function serve() {
-  const types = { ".html": "text/html", ".js": "text/javascript", ".css": "text/css" };
+  const types = { ".html": "text/html", ".js": "text/javascript", ".css": "text/css", ".webp": "image/webp" };
   const server = http.createServer((req, res) => {
     const file = path.join(WEB, req.url === "/" ? "index.html" : path.normalize(req.url).replace(/^\/+/, ""));
     if (!file.startsWith(WEB) || !fs.existsSync(file)) { res.writeHead(404); return res.end(); }
