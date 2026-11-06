@@ -92,6 +92,8 @@ function serve() {
       if (v.startsWith("eq.")) rows = rows.filter((r) => String(r[k]) === v.slice(3));
       if (v.startsWith("in.(")) { const set = v.slice(4, -1).split(","); rows = rows.filter((r) => set.includes(String(r[k]))); }
     }
+    const order = (url.searchParams.get("order") || "").split(",")[0];
+    if (order.endsWith(".desc")) { const k = order.slice(0, -5); rows = [...rows].sort((a, b) => (a[k] < b[k] ? 1 : a[k] > b[k] ? -1 : 0)); }
     if (url.searchParams.get("limit")) rows = rows.slice(0, Number(url.searchParams.get("limit")));
     return json(rows);
   });
@@ -139,6 +141,7 @@ function serve() {
   });
   await step("audit history verifies the chain", async () => {
     await page.click("nav >> text=Audit history"); await page.click("text=Verify the hash chain"); await see("Intact: 64 rows verified");
+    if (await page.evaluate(() => document.documentElement.scrollWidth > window.innerWidth + 1)) throw new Error("audit page scrolls sideways");
   });
   await step("light mode", async () => {
     await page.click("text=Light mode"); await page.waitForFunction(() => document.documentElement.dataset.theme === "light");
@@ -148,6 +151,7 @@ function serve() {
     await page.setViewportSize({ width: 390, height: 844 });
     const wide = await page.evaluate(() => document.documentElement.scrollWidth > window.innerWidth + 1);
     if (wide) throw new Error("page scrolls sideways at 390px");
+    await page.setViewportSize({ width: 1360, height: 860 });
   });
   await step("sign out", async () => { await page.click("text=Sign out"); await page.locator("#email").waitFor(); if (await page.evaluate(() => sessionStorage.length)) throw new Error("session left in storage"); });
 

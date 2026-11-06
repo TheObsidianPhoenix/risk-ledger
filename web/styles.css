@@ -56,7 +56,7 @@ code, .mono { font-family: var(--mono); font-size: 12.5px; }
 button, input, textarea, select { font: inherit; color: inherit; }
 
 /* ---------- layout ---------- */
-.shell { display: grid; grid-template-columns: 232px 1fr; min-height: 100vh; }
+.shell { display: grid; grid-template-columns: 232px minmax(0, 1fr); min-height: 100vh; }
 .sidebar { background: var(--bg-sunken); border-right: 1px solid var(--border); padding: 18px 12px; display: flex; flex-direction: column; gap: 4px; position: sticky; top: 0; height: 100vh; }
 .brand { display: flex; align-items: center; gap: 10px; padding: 4px 10px 18px; font-weight: 650; font-size: 15px; }
 .brand-mark { width: 26px; height: 26px; border-radius: 7px; background: linear-gradient(135deg, var(--accent), var(--accent-strong)); display: grid; place-items: center; color: var(--accent-ink); font-weight: 800; font-size: 13px; }
@@ -66,7 +66,7 @@ button, input, textarea, select { font: inherit; color: inherit; }
 .nav-item[aria-current="page"] { background: var(--neutral-bg); color: var(--text); font-weight: 550; box-shadow: inset 2px 0 0 var(--accent); }
 .nav-count { font-size: 11.5px; padding: 0 7px; border-radius: 999px; background: var(--fail-bg); color: var(--fail); font-weight: 600; }
 .sidebar-foot { margin-top: auto; padding: 12px 10px 0; border-top: 1px solid var(--border); display: flex; flex-direction: column; gap: 8px; color: var(--text-muted); font-size: 12.5px; }
-.main { padding: 28px 36px 48px; max-width: 1240px; width: 100%; }
+.main { padding: 28px 36px 48px; max-width: 1240px; width: 100%; min-width: 0; }
 .page-head { display: flex; align-items: flex-end; justify-content: space-between; gap: 16px; margin-bottom: 22px; flex-wrap: wrap; }
 .page-head p { color: var(--text-muted); margin-top: 6px; max-width: 70ch; }
 .actions { display: flex; gap: 8px; flex-wrap: wrap; }
@@ -180,6 +180,6 @@ pre { background: var(--bg-sunken); border: 1px solid var(--border); border-radi
 .gap-bottom { margin-bottom: 16px; }
 .row-between { display: flex; justify-content: space-between; gap: 12px; }
 .row-end { display: flex; justify-content: flex-end; }
-.clip { max-width: 420px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.clip { min-width: 260px; max-width: 420px; overflow-wrap: anywhere; font-size: 12px; }
 .trend { height: 120px; display: block; }
 .trend-labels { display: flex; justify-content: space-between; margin-top: 6px; font-size: 11px; color: var(--text-faint); }
