@@ -42,7 +42,7 @@ select public.run_control_tests();
 select id, last_result, last_detail from public.control_status order by id;
 ```
 
-Expect 6 passes and 5 failures. **SB-03** fails until the GRC analyst sets up MFA; after that, the next run passes, its remediation item closes by evidence, and risk R-01 becomes ready to close.
+Expect 7 passes and 5 failures. **SB-03** fails until the GRC analyst sets up MFA; after that, the next run passes, its remediation item closes by evidence, and risk R-01 becomes ready to close.
 
 ## Optional: run the tests every day
 
@@ -53,3 +53,11 @@ select cron.schedule('risk-ledger-daily', '0 15 * * *', $$select public.run_cont
 ```
 
 Scheduled runs are recorded with no user, and the audit log shows them as `system via engine`.
+
+## Upgrading an existing project
+
+If you set up the database with an earlier `setup.sql`, run the scripts in [`supabase/migrations/`](../supabase/migrations/) in number order instead of running `setup.sql` again.
+
+| Script | Adds |
+|---|---|
+| `002_open_policy_check.sql` | Live check **SB-04**: no policy opens a table to everyone (see [why RLS matters](why-rls-matters.md)) |

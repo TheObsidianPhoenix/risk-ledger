@@ -168,6 +168,33 @@ begin
      where n.nspname = 'public' and c.relkind = 'r';
     snapshot := jsonb_build_object('tables_checked', total, 'without_rls', missing);
     detail := format('%s of %s tables have Row Level Security on', total - jsonb_array_length(missing), total);
+  elsif check_name = 'no_open_policies' then
+    -- The pattern behind CVE-2025-48757 and the 2026 UpGuard findings: Row Level Security is on,
+    -- but a policy lets anyone, or any signed-in user, read every row
+    select coalesce(jsonb_agg(problem order by problem), '[]'), (select count(*) from pg_policies where schemaname = 'public')
+      into missing, total
+      from (
+        select tablename || ': policy "' || policyname || '" allows every row (true)' as problem
+          from pg_policies where schemaname = 'public'
+           and (btrim(coalesce(qual, ''), '() ') = 'true' or btrim(coalesce(with_check, ''), '() ') = 'true')
+        union all
+        select tablename || ': policy "' || policyname || '" only checks that someone is signed in'
+          from pg_policies where schemaname = 'public'
+           and (coalesce(qual, '') ~* '^\(*\s*auth\.uid\(\)\s+is\s+not\s+null\s*\)*$'
+                or coalesce(qual, '') ~* 'auth\.role\(\)\s*=\s*''authenticated''')
+        union all
+        select tablename || ': policy "' || policyname || '" applies to anonymous visitors'
+          from pg_policies where schemaname = 'public' and roles && array['anon', 'public']::name[]
+        union all
+        select c.relname || ': anonymous visitors have ' || lower(p) || ' rights'
+          from pg_class c join pg_namespace n on n.oid = c.relnamespace,
+               unnest(array['SELECT', 'INSERT', 'UPDATE', 'DELETE']) p
+         where n.nspname = 'public' and c.relkind in ('r', 'v') and has_table_privilege('anon', c.oid, p)
+      ) problems;
+    snapshot := jsonb_build_object('policies_checked', total, 'problems', missing);
+    detail := case when jsonb_array_length(missing) = 0
+                   then format('%s policies checked: none opens a table to everyone or to any signed-in user', total)
+                   else jsonb_array_length(missing) || ' over-broad access rule(s)' end;
   elsif check_name = 'audit_log_protected' then
     select coalesce(jsonb_agg(problem), '[]') into missing from (
       select 'no-change trigger missing or disabled' as problem

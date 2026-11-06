@@ -71,7 +71,7 @@ create table public.controls (
   source_system  text not null references public.systems(id),
   test_kind      text not null check (test_kind in ('rule', 'live')),
   rule           jsonb,                               -- a declarative rule, never code
-  live_check     text check (live_check in ('rls_on_all_tables', 'audit_log_protected', 'grc_analysts_have_mfa')),
+  live_check     text check (live_check in ('rls_on_all_tables', 'no_open_policies', 'audit_log_protected', 'grc_analysts_have_mfa')),
   test_logic     text not null default '',            -- the rule in plain English, for the evidence viewer
   frequency_days int  not null default 30 check (frequency_days between 1 and 365),
   severity       text not null default 'medium' check (severity in ('low', 'medium', 'high', 'critical')),
@@ -329,6 +329,33 @@ begin
      where n.nspname = 'public' and c.relkind = 'r';
     snapshot := jsonb_build_object('tables_checked', total, 'without_rls', missing);
     detail := format('%s of %s tables have Row Level Security on', total - jsonb_array_length(missing), total);
+  elsif check_name = 'no_open_policies' then
+    -- The pattern behind CVE-2025-48757 and the 2026 UpGuard findings: Row Level Security is on,
+    -- but a policy lets anyone, or any signed-in user, read every row
+    select coalesce(jsonb_agg(problem order by problem), '[]'), (select count(*) from pg_policies where schemaname = 'public')
+      into missing, total
+      from (
+        select tablename || ': policy "' || policyname || '" allows every row (true)' as problem
+          from pg_policies where schemaname = 'public'
+           and (btrim(coalesce(qual, ''), '() ') = 'true' or btrim(coalesce(with_check, ''), '() ') = 'true')
+        union all
+        select tablename || ': policy "' || policyname || '" only checks that someone is signed in'
+          from pg_policies where schemaname = 'public'
+           and (coalesce(qual, '') ~* '^\(*\s*auth\.uid\(\)\s+is\s+not\s+null\s*\)*$'
+                or coalesce(qual, '') ~* 'auth\.role\(\)\s*=\s*''authenticated''')
+        union all
+        select tablename || ': policy "' || policyname || '" applies to anonymous visitors'
+          from pg_policies where schemaname = 'public' and roles && array['anon', 'public']::name[]
+        union all
+        select c.relname || ': anonymous visitors have ' || lower(p) || ' rights'
+          from pg_class c join pg_namespace n on n.oid = c.relnamespace,
+               unnest(array['SELECT', 'INSERT', 'UPDATE', 'DELETE']) p
+         where n.nspname = 'public' and c.relkind in ('r', 'v') and has_table_privilege('anon', c.oid, p)
+      ) problems;
+    snapshot := jsonb_build_object('policies_checked', total, 'problems', missing);
+    detail := case when jsonb_array_length(missing) = 0
+                   then format('%s policies checked: none opens a table to everyone or to any signed-in user', total)
+                   else jsonb_array_length(missing) || ' over-broad access rule(s)' end;
   elsif check_name = 'audit_log_protected' then
     select coalesce(jsonb_agg(problem), '[]') into missing from (
       select 'no-change trigger missing or disabled' as problem
@@ -898,6 +925,9 @@ insert into public.controls (id, title, risk_reduced, risk_id, source_system, te
   ('SB-01', 'Row Level Security on every table',
    'A signed-in user can only reach the rows a policy allows, even if the app has a bug.', 'R-07', 'supabase', 'live', null, 'rls_on_all_tables',
    'Live: every table in the public schema has Row Level Security enabled', 1, 'critical', 'GRC', '{CC6.1}', '{A.8.3}', 'active', 'Jasmine Alexander (setup)', now()),
+  ('SB-04', 'No policy opens a table to everyone',
+   'Turning RLS on isn''t enough: a policy of "true" or "any signed-in user" would still expose every row, the pattern behind CVE-2025-48757.', 'R-07', 'supabase', 'live', null, 'no_open_policies',
+   'Live: no policy allows every row, only checks that someone is signed in, or applies to anonymous visitors, and anonymous visitors have no table rights', 1, 'critical', 'GRC', '{CC6.1,CC6.3}', '{A.5.15,A.8.3}', 'active', 'Jasmine Alexander (setup)', now()),
   ('SB-02', 'Audit log can''t be altered',
    'The record of who did what survives even a mistake or a malicious insider.', 'R-04', 'supabase', 'live', null, 'audit_log_protected',
    'Live: the audit log blocks updates, deletes and truncation, and no client can write to it', 1, 'high', 'GRC', '{CC7.2}', '{A.8.15}', 'active', 'Jasmine Alexander (setup)', now()),

@@ -27,13 +27,16 @@ insert into auth.users (id, email) values
   ('00000000-0000-0000-0000-0000000000a1', 'jasmine@example.com'),
   ('00000000-0000-0000-0000-0000000000b2', 'priya@example.com'),
   ('00000000-0000-0000-0000-0000000000c3', 'auditor@example.com'),
-  ('00000000-0000-0000-0000-0000000000d4', 'newcomer@example.com');
+  ('00000000-0000-0000-0000-0000000000d4', 'newcomer@example.com'),
+  ('00000000-0000-0000-0000-0000000000e5', 'marco@example.com');
 update public.profiles set role = 'grc_analyst', display_name = 'Jasmine' where id = '00000000-0000-0000-0000-0000000000a1';
 update public.profiles set role = 'control_owner', display_name = 'Priya' where id = '00000000-0000-0000-0000-0000000000b2';
 update public.profiles set role = 'auditor', display_name = 'Avery' where id = '00000000-0000-0000-0000-0000000000c3';
+update public.profiles set role = 'control_owner', display_name = 'Marco' where id = '00000000-0000-0000-0000-0000000000e5';
 update public.controls set owner_id = '00000000-0000-0000-0000-0000000000b2', owner_name = 'Priya' where id = 'CC-04';
+update public.controls set owner_id = '00000000-0000-0000-0000-0000000000e5', owner_name = 'Marco' where id = 'CC-07';
 
-select t.check('setup: 11 active controls', (select count(*) = 11 from public.controls where status = 'active'));
+select t.check('setup: 12 active controls', (select count(*) = 12 from public.controls where status = 'active'));
 select t.check('setup: new sign-up gets no access', (select role = 'pending' from public.profiles where id = '00000000-0000-0000-0000-0000000000d4'));
 select t.check('setup: every table has RLS', not exists (select 1 from pg_class c join pg_namespace n on n.oid = c.relnamespace
                                                           where n.nspname = 'public' and c.relkind = 'r' and not c.relrowsecurity));
@@ -56,7 +59,7 @@ reset role;
 -- ---------------- GRC analyst runs the tests ----------------
 set role authenticated; select set_config('request.jwt.claim.sub', '00000000-0000-0000-0000-0000000000a1', false);
 select public.run_control_tests();
-select t.check('run 1: expected passes', (select array_agg(id order by id) = '{CC-01,CC-03,CC-05,CC-08,SB-01,SB-02}'
+select t.check('run 1: expected passes', (select array_agg(id order by id) = '{CC-01,CC-03,CC-05,CC-08,SB-01,SB-02,SB-04}'
                                             from public.control_status where last_result = 'pass'),
                (select string_agg(id || '=' || last_result, ' ' order by id) from public.control_status));
 select t.check('run 1: expected failures', (select array_agg(id order by id) = '{CC-02,CC-04,CC-06,CC-07,SB-03}'
@@ -95,6 +98,15 @@ select t.check('owner: can''t change the due date', t.refused('update public.rem
 select t.check('owner: can''t run tests', t.refused('select public.run_control_tests()'));
 select t.check('owner: can''t touch others'' items', (select count(*) = 0 from (select 1 from public.remediation where control_id = 'CC-02') x));
 reset role;
+
+-- ---------------- A second owner can't see the first owner's work (horizontal isolation) ----------------
+set role authenticated; select set_config('request.jwt.claim.sub', '00000000-0000-0000-0000-0000000000e5', false);
+select t.check('second owner: sees only their own remediation', (select count(*) = 1 and bool_and(control_id = 'CC-07') from public.remediation));
+select t.check('second owner: can''t see Priya''s item or note', not exists (select 1 from public.remediation where control_id = 'CC-04' or owner_note like '%public access%'));
+select t.check('second owner: can''t see Priya''s evidence', not exists (select 1 from public.evidence where control_id = 'CC-04'));
+update public.remediation set owner_note = 'Marco was here' where control_id = 'CC-04';
+reset role;
+select t.check('second owner: update to Priya''s item had no effect', not exists (select 1 from public.remediation where owner_note = 'Marco was here'));
 
 -- ---------------- Auditor ----------------
 set role authenticated; select set_config('request.jwt.claim.sub', '00000000-0000-0000-0000-0000000000c3', false);
@@ -169,6 +181,21 @@ select t.check('engine: empty scope is an error', (select result = 'error' from 
   '{"type":"all_match","collection":"x","where":{"privileged":true},"field":"mfa","equals":true}', '{"x":[{"privileged":false}]}', now())));
 select t.check('engine: missing field counts as failing', (select result = 'fail' from public.evaluate_rule(
   '{"type":"all_match","collection":"x","field":"mfa","equals":true}', '{"x":[{"id":"a"}]}', now())));
+
+-- ---------------- The live check catches the CVE-2025-48757 pattern ----------------
+create policy "everyone reads risks" on public.risks for select to authenticated using (true);
+select t.check('live: a "true" policy fails SB-04', (select result = 'fail' and failing::text like '%allows every row%' from public.live_check('no_open_policies')));
+drop policy "everyone reads risks" on public.risks;
+create policy "any signed-in user" on public.remediation for select to authenticated using (auth.uid() is not null);
+select t.check('live: an "any signed-in user" policy fails SB-04', (select result = 'fail' and failing::text like '%only checks that someone is signed in%' from public.live_check('no_open_policies')));
+drop policy "any signed-in user" on public.remediation;
+create policy "visitors" on public.controls for select to anon using (status = 'active');
+select t.check('live: a policy for anonymous visitors fails SB-04', (select result = 'fail' and failing::text like '%anonymous visitors%' from public.live_check('no_open_policies')));
+drop policy "visitors" on public.controls;
+grant select on public.evidence to anon;
+select t.check('live: table rights for anonymous visitors fail SB-04', (select result = 'fail' and failing::text like '%evidence: anonymous visitors have select%' from public.live_check('no_open_policies')));
+revoke select on public.evidence from anon;
+select t.check('live: SB-04 passes again once fixed', (select result = 'pass' from public.live_check('no_open_policies')));
 
 -- ---------------- The live check catches a new table without RLS ----------------
 create table public.forgot_rls (id int);

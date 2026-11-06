@@ -66,7 +66,7 @@ create table public.controls (
   source_system  text not null references public.systems(id),
   test_kind      text not null check (test_kind in ('rule', 'live')),
   rule           jsonb,                               -- a declarative rule, never code
-  live_check     text check (live_check in ('rls_on_all_tables', 'audit_log_protected', 'grc_analysts_have_mfa')),
+  live_check     text check (live_check in ('rls_on_all_tables', 'no_open_policies', 'audit_log_protected', 'grc_analysts_have_mfa')),
   test_logic     text not null default '',            -- the rule in plain English, for the evidence viewer
   frequency_days int  not null default 30 check (frequency_days between 1 and 365),
   severity       text not null default 'medium' check (severity in ('low', 'medium', 'high', 'critical')),

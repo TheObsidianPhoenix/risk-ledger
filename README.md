@@ -15,7 +15,7 @@ Source systems ──► Control tests ──► Evidence ──► Remediation 
                                     every change ──► hash-chained audit log
 ```
 
-- **Eleven controls** across eight source systems. Seven systems are **mock** data shaped like their real APIs (AWS, Google Cloud, Okta, Google Workspace, an HR system, security training, vendor management). **Supabase itself is live**: three checks read this database directly (Row Level Security on every table, the audit log can't be altered, GRC analysts use MFA).
+- **Twelve controls** across eight source systems. Seven systems are **mock** data shaped like their real APIs (AWS, Google Cloud, Okta, Google Workspace, an HR system, security training, vendor management). **Supabase itself is live**: four checks read this database directly: Row Level Security on every table, **no policy that opens a table to everyone** (the pattern behind CVE-2025-48757), the audit log can't be altered, and GRC analysts use MFA.
 - **Every control says how it lowers risk.** "How does this actually lower risk?" is the first question to ask about any control, so it's a required field.
 - **A failed test opens remediation work** for the control's owner, due in 7 to 60 days by severity. **Only passing evidence can close it.** Nobody can mark a fix done by hand.
 - **Risks follow their controls.** A risk becomes *ready to close* only when every linked control's latest evidence passes, and a GRC analyst closes it with a note. The trend view shows the register shrinking.
@@ -32,7 +32,7 @@ That's what makes **AI-drafted tests** safe: an assistant turns a plain-English 
 | Control | How |
 |---|---|
 | Least privilege by role | **GRC analyst** runs tests, approves controls, accepts and closes risks. **Control owner** sees and updates only their own remediation (progress and notes). **Auditor** reads everything, changes nothing. **New sign-ups get no access** until the system owner assigns a role |
-| Row Level Security | On every table, deny by default; a live control (SB-01) fails if a table without it ever appears |
+| Row Level Security | On every table, deny by default. Two live controls watch it daily: SB-01 fails if a table without RLS appears; SB-04 fails if any policy allows every row, only checks that someone is signed in, or applies to anonymous visitors. See [why RLS gets its own controls](docs/why-rls-matters.md) |
 | Workflow rules in the database | Guard triggers enforce them even if the web page has a bug: no closing remediation by hand, no closing a risk before its evidence passes, no activating a control without approval, acceptance capped at 180 days |
 | Permanent evidence | Evidence and source snapshots can't be updated or deleted, even by the database owner |
 | Tamper-evident audit log | Every change is logged with who, when and what changed. Each row carries a hash of the one before it; `verify_audit_chain()` finds any edited row. Updates, deletes and truncation are blocked |
@@ -41,11 +41,13 @@ That's what makes **AI-drafted tests** safe: an assistant turns a plain-English 
 
 ## Tests
 
-`tests/run.sh` builds the database on plain Postgres (with a small stand-in for Supabase's `auth` schema) and runs **65 checks** acting as each role: anonymous, pending, GRC analyst, control owner and auditor. They cover access control, workflow rules, evidence-driven closure, risk acceptance expiry, audit-chain tamper detection, AI-draft validation and the live checks. Removing a guard or a Row Level Security policy makes them fail.
+`tests/run.sh` builds the database on plain Postgres (with a small stand-in for Supabase's `auth` schema) and runs **74 checks** acting as each role: anonymous, pending, GRC analyst, two control owners and an auditor. They cover access control (including one owner trying to read another's work), workflow rules, evidence-driven closure, risk acceptance expiry, audit-chain tamper detection, AI-draft validation and the live checks. Removing a guard or a Row Level Security policy makes them fail.
 
 ```bash
 PGHOST=/tmp PGPORT=54329 PGUSER=postgres ./tests/run.sh
 ```
+
+From the outside, [`scripts/anonymous-probe.sh`](scripts/anonymous-probe.sh) attacks a live project with only its public key, the way the 2025 and 2026 scans of exposed Supabase apps did, and confirms every table and function refuses an anonymous visitor.
 
 ## Set up your own copy
 
