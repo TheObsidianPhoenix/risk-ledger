@@ -64,7 +64,7 @@ select t.check('run 1: expected passes', (select array_agg(id order by id) = '{C
                (select string_agg(id || '=' || last_result, ' ' order by id) from public.control_status));
 select t.check('run 1: expected failures', (select array_agg(id order by id) = '{CC-02,CC-04,CC-06,CC-07,SB-03}'
                                               from public.control_status where last_result = 'fail'));
-select t.check('run 1: failing items are named', (select failing @> '["meridian-marketing-assets"]' from public.evidence where control_id = 'CC-04'));
+select t.check('run 1: failing items are named', (select failing @> '["obsidian-marketing-assets"]' from public.evidence where control_id = 'CC-04'));
 select t.check('run 1: percentage reported', (select detail like '92%% (46 of 50)%' from public.evidence where control_id = 'CC-07'),
                (select detail from public.evidence where control_id = 'CC-07'));
 select t.check('run 1: one remediation item per failure', (select count(*) = 5 from public.remediation where status = 'open'));
@@ -135,7 +135,7 @@ rollback;
 -- ---------------- Fixes are proven by evidence, and the register shrinks ----------------
 insert into auth.mfa_factors (user_id, status) values ('00000000-0000-0000-0000-0000000000a1', 'verified');
 set role authenticated; select set_config('request.jwt.claim.sub', '00000000-0000-0000-0000-0000000000a1', false);
-select public.load_mock_snapshot('gcp', '{"buckets":[{"name":"meridian-analytics-exports","public":false},{"name":"meridian-marketing-assets","public":false},{"name":"meridian-ml-training","public":false}]}');
+select public.load_mock_snapshot('gcp', '{"buckets":[{"name":"obsidian-analytics-exports","public":false},{"name":"obsidian-marketing-assets","public":false},{"name":"obsidian-ml-training","public":false}]}');
 select t.check('GRC: can''t fake live evidence', t.refused('select public.load_mock_snapshot(''supabase'', ''{}'')'));
 select public.run_control_tests();
 select t.check('run 2: MFA fix evidenced', (select status = 'evidenced' and resolved_evidence_id is not null from public.remediation where control_id = 'SB-03'));

@@ -4,7 +4,7 @@ begin;
 
 -- ===== supabase/01_schema.sql =====
 -- Risk Ledger, part 1 of 4: tables.
--- Continuous control monitoring for Meridian Trust Labs (a fictional company).
+-- Continuous control monitoring for Obsidian Phoenix Labs (a demo company; all data is fictional).
 -- Every row of source data is mock data, except the "supabase" system, whose
 -- checks read this database itself.
 
@@ -819,7 +819,7 @@ alter default privileges in schema public revoke all on tables from anon, authen
 alter default privileges in schema public revoke execute on functions from public, anon, authenticated;
 
 -- ===== supabase/04_seed.sql =====
--- Risk Ledger, part 4 of 4: starting data for Meridian Trust Labs (fictional).
+-- Risk Ledger, part 4 of 4: starting data for Obsidian Phoenix Labs (demo).
 -- Source data is MOCK data shaped like what real collectors return from each
 -- system's API. The "supabase" system is LIVE: its checks read this database.
 -- Dates are relative to the moment this runs, so the demo stays current.
@@ -836,27 +836,27 @@ insert into public.systems (id, name, category, live, note) values
 
 insert into public.source_snapshots (system_id, collected_at, data) values
 ('okta', now(), jsonb_build_object('users', jsonb_build_array(
-  jsonb_build_object('id', 'okta-001', 'email', 'admin.ops@meridian.example', 'privileged', true,  'mfa_enabled', true),
-  jsonb_build_object('id', 'okta-002', 'email', 'it.lead@meridian.example',   'privileged', true,  'mfa_enabled', true),
-  jsonb_build_object('id', 'okta-003', 'email', 'sre.oncall@meridian.example','privileged', true,  'mfa_enabled', true),
-  jsonb_build_object('id', 'okta-004', 'email', 'analyst@meridian.example',   'privileged', false, 'mfa_enabled', false),
-  jsonb_build_object('id', 'okta-005', 'email', 'sales.rep@meridian.example', 'privileged', false, 'mfa_enabled', true)))),
+  jsonb_build_object('id', 'okta-001', 'email', 'admin.ops@obsidianphoenix.example', 'privileged', true,  'mfa_enabled', true),
+  jsonb_build_object('id', 'okta-002', 'email', 'it.lead@obsidianphoenix.example',   'privileged', true,  'mfa_enabled', true),
+  jsonb_build_object('id', 'okta-003', 'email', 'sre.oncall@obsidianphoenix.example','privileged', true,  'mfa_enabled', true),
+  jsonb_build_object('id', 'okta-004', 'email', 'analyst@obsidianphoenix.example',   'privileged', false, 'mfa_enabled', false),
+  jsonb_build_object('id', 'okta-005', 'email', 'sales.rep@obsidianphoenix.example', 'privileged', false, 'mfa_enabled', true)))),
 ('hris', now(), jsonb_build_object('terminations', jsonb_build_array(
   jsonb_build_object('id', 'term-101', 'name', 'Former employee A', 'terminated_at', now() - interval '40 days', 'access_removed_at', now() - interval '40 days' + interval '3 hours'),
   jsonb_build_object('id', 'term-102', 'name', 'Former employee B', 'terminated_at', now() - interval '21 days', 'access_removed_at', now() - interval '18 days'),
   jsonb_build_object('id', 'term-103', 'name', 'Former contractor C', 'terminated_at', now() - interval '6 days',  'access_removed_at', now() - interval '6 days' + interval '20 hours')))),
 ('aws', now(), jsonb_build_object(
   'buckets', jsonb_build_array(
-    jsonb_build_object('name', 'meridian-prod-customer-data', 'encrypted', true, 'encryption', 'aws:kms'),
-    jsonb_build_object('name', 'meridian-prod-backups',       'encrypted', true, 'encryption', 'aws:kms'),
-    jsonb_build_object('name', 'meridian-logs',               'encrypted', true, 'encryption', 'AES256')),
+    jsonb_build_object('name', 'obsidian-prod-customer-data', 'encrypted', true, 'encryption', 'aws:kms'),
+    jsonb_build_object('name', 'obsidian-prod-backups',       'encrypted', true, 'encryption', 'aws:kms'),
+    jsonb_build_object('name', 'obsidian-logs',               'encrypted', true, 'encryption', 'AES256')),
   'trails', jsonb_build_array(
     jsonb_build_object('name', 'org-trail', 'critical', true, 'logging_enabled', true),
     jsonb_build_object('name', 'sandbox-trail', 'critical', false, 'logging_enabled', false)))),
 ('gcp', now(), jsonb_build_object('buckets', jsonb_build_array(
-  jsonb_build_object('name', 'meridian-analytics-exports', 'public', false),
-  jsonb_build_object('name', 'meridian-marketing-assets',  'public', true),
-  jsonb_build_object('name', 'meridian-ml-training',       'public', false)))),
+  jsonb_build_object('name', 'obsidian-analytics-exports', 'public', false),
+  jsonb_build_object('name', 'obsidian-marketing-assets',  'public', true),
+  jsonb_build_object('name', 'obsidian-ml-training',       'public', false)))),
 ('google_workspace', now(), jsonb_build_object('access_reviews', jsonb_build_array(
   jsonb_build_object('app', 'Production AWS',  'last_reviewed_at', now() - interval '35 days'),
   jsonb_build_object('app', 'Okta admin',      'last_reviewed_at', now() - interval '61 days'),

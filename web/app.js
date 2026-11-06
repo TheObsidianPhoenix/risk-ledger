@@ -155,7 +155,7 @@
   function authLayout(...formChildren) {
     return h("div", { class: "auth" },
       h("aside", { class: "auth-side" },
-        h("div", { class: "brand" }, h("div", { class: "brand-mark" }, "RL"), h("div", {}, "Risk Ledger", h("small", {}, "Meridian Trust Labs (fictional)"))),
+        h("div", { class: "brand" }, h("div", { class: "brand-mark" }, "RL"), h("div", {}, "Risk Ledger", h("small", {}, "Obsidian Phoenix Labs (demo)"))),
         h("div", {},
           h("h1", {}, "Evidence, not screenshots."),
           h("p", {}, "Continuous control monitoring on Supabase. Tests pull evidence from source systems, failures open remediation work, and the risk register shrinks only when evidence proves a fix."),
@@ -264,7 +264,7 @@
     ]);
     const failing = status.filter((c) => c.status === "active" && c.last_result && c.last_result !== "pass").length;
     const nav = h("nav", { class: "sidebar", "aria-label": "Main" },
-      h("div", { class: "brand" }, h("div", { class: "brand-mark" }, "RL"), h("div", {}, "Risk Ledger", h("small", {}, "Meridian Trust Labs"))),
+      h("div", { class: "brand" }, h("div", { class: "brand-mark" }, "RL"), h("div", {}, "Risk Ledger", h("small", {}, "Obsidian Phoenix Labs"))),
       NAV.filter(([v]) => v !== "audit" || can.audit()).map(([v, label]) =>
         h("button", { class: "nav-item", "aria-current": state.view === v ? "page" : false, onclick: () => go(v) }, label,
           v === "controls" && failing ? h("span", { class: "nav-count" }, failing) : null,

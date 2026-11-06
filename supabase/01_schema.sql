@@ -1,5 +1,5 @@
 -- Risk Ledger, part 1 of 4: tables.
--- Continuous control monitoring for Meridian Trust Labs (a fictional company).
+-- Continuous control monitoring for Obsidian Phoenix Labs (a demo company; all data is fictional).
 -- Every row of source data is mock data, except the "supabase" system, whose
 -- checks read this database itself.
 
