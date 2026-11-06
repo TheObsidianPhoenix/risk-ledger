@@ -21,6 +21,16 @@ Source systems ──► Control tests ──► Evidence ──► Remediation 
 - **Risks follow their controls.** A risk becomes *ready to close* only when every linked control's latest evidence passes, and a GRC analyst closes it with a note. The trend view shows the register shrinking.
 - **Risk acceptance expires.** An accepted gap needs a reason and an end date within 180 days; after that, the next test run reopens it.
 
+## The web page
+
+[`web/`](web/) is a small, dependency-free page published on GitHub Pages. It signs in with Supabase Auth, asks for authenticator-app MFA, and has six views: **dashboard**, **controls**, an **evidence viewer**, **remediation**, the **risk register** with its trend, and the **audit history** with a one-click hash-chain check. What each person sees depends on their role, and the database (not the page) enforces it.
+
+- Talks to Supabase's REST and Auth APIs directly with `fetch`, using only the **publishable key** and the signed-in user's token. No secret key exists anywhere in the page, and the publish step refuses to deploy one.
+- A strict **Content Security Policy**: only its own files, no inline code or styles, and network calls only to Supabase.
+- Text is always inserted as text, never as HTML. The login lives in `sessionStorage` and ends when the tab closes.
+
+`tests/web/smoke.js` runs the page in a real browser against data dumped from the tested database: sign-in, a wrong password, MFA setup and a wrong code, every view, a remediation update, closing a risk, verifying the audit chain, light mode and phone width. It fails on any page error or security-policy violation. Both test suites run on every push before the page is published.
+
 ## Control tests are rules, not code
 
 A test is a small JSON rule, such as "every Okta user marked privileged has `mfa_enabled = true`," evaluated by fixed, tested code. Six rule shapes exist: `all_match`, `none_match`, `percent_match`, `within_days`, `max_age_days` and `before_date`. A rule can only compare fields in collected evidence. It can never run SQL or code.
@@ -45,6 +55,7 @@ That's what makes **AI-drafted tests** safe: an assistant turns a plain-English 
 
 ```bash
 PGHOST=/tmp PGPORT=54329 PGUSER=postgres ./tests/run.sh
+node tests/web/smoke.js        # needs Playwright
 ```
 
 From the outside, [`scripts/anonymous-probe.sh`](scripts/anonymous-probe.sh) attacks a live project with only its public key, the way the 2025 and 2026 scans of exposed Supabase apps did, and confirms every table and function refuses an anonymous visitor.
