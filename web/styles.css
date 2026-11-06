@@ -200,31 +200,4 @@ pre { background: var(--bg-sunken); border: 1px solid var(--border); border-radi
 .tiles .tile:nth-child(2) { border-top-color: color-mix(in srgb, var(--coral) 55%, transparent); }
 .tiles .tile:nth-child(3) { border-top-color: color-mix(in srgb, var(--peach) 60%, transparent); }
 .tiles .tile:nth-child(4) { border-top-color: color-mix(in srgb, var(--teal) 55%, transparent); }
-
-/* ---------- Obsidian Phoenix watermark ---------- */
-.phoenix-mark {
-  position: fixed; right: -4vw; bottom: -6vh; width: min(58vw, 680px); height: auto;
-  opacity: 0.1; pointer-events: none; z-index: 0;
-  animation: phoenix-rise 16s ease-in-out infinite alternate;
-}
-:root[data-theme="light"] .phoenix-mark { opacity: 0.11; }
 .shell, .auth { position: relative; z-index: 1; }
-.phoenix-mark .wing-l { transform-box: view-box; transform-origin: 194px 182px; animation: phoenix-wing-l 7s ease-in-out infinite alternate; }
-.phoenix-mark .wing-r { transform-box: view-box; transform-origin: 210px 182px; animation: phoenix-wing-r 7s ease-in-out infinite alternate; }
-.phoenix-mark .tail   { transform-box: view-box; transform-origin: 200px 232px; animation: phoenix-tail 9s ease-in-out infinite alternate; }
-.phoenix-mark .ember {
-  stroke: var(--peach); stroke-width: 3.2; stroke-dasharray: 14 520; stroke-dashoffset: 534;
-  opacity: 0.9; animation: phoenix-ember 9s linear infinite;
-}
-@keyframes phoenix-rise  { from { transform: translateY(0); } to { transform: translateY(-28px); } }
-@keyframes phoenix-wing-l { from { transform: rotate(0deg); } to { transform: rotate(-5deg); } }
-@keyframes phoenix-wing-r { from { transform: rotate(0deg); } to { transform: rotate(5deg); } }
-@keyframes phoenix-tail  { from { transform: rotate(-1.5deg); } to { transform: rotate(1.5deg); } }
-@keyframes phoenix-ember { to { stroke-dashoffset: 0; } }
-@media (prefers-reduced-motion: reduce) {
-  .phoenix-mark, .phoenix-mark * { animation: none !important; }
-  .phoenix-mark .ember { display: none; }
-}
-@media (max-width: 980px) { .phoenix-mark { width: 90vw; right: -20vw; opacity: 0.06; } }
-/* Let the phoenix glow through the sign-in card like frosted glass */
-.auth-form .card { background: color-mix(in srgb, var(--bg-raised) 62%, transparent); -webkit-backdrop-filter: blur(2px); backdrop-filter: blur(2px); }
