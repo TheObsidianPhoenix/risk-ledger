@@ -204,7 +204,7 @@ pre { background: var(--bg-sunken); border: 1px solid var(--border); border-radi
 /* ---------- Obsidian Phoenix watermark ---------- */
 .phoenix-mark {
   position: fixed; right: -4vw; bottom: -6vh; width: min(58vw, 680px); height: auto;
-  opacity: 0.075; pointer-events: none; z-index: 0;
+  opacity: 0.1; pointer-events: none; z-index: 0;
   animation: phoenix-rise 16s ease-in-out infinite alternate;
 }
 :root[data-theme="light"] .phoenix-mark { opacity: 0.11; }
@@ -226,3 +226,5 @@ pre { background: var(--bg-sunken); border: 1px solid var(--border); border-radi
   .phoenix-mark .ember { display: none; }
 }
 @media (max-width: 980px) { .phoenix-mark { width: 90vw; right: -20vw; opacity: 0.06; } }
+/* Let the phoenix glow through the sign-in card like frosted glass */
+.auth-form .card { background: color-mix(in srgb, var(--bg-raised) 62%, transparent); -webkit-backdrop-filter: blur(2px); backdrop-filter: blur(2px); }
