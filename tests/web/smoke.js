@@ -16,7 +16,8 @@ const shots = process.argv[2];
 const fixture = (n) => JSON.parse(fs.readFileSync(path.join(FIX, n + ".json"), "utf8"));
 const b64 = (o) => Buffer.from(JSON.stringify(o)).toString("base64url");
 const jwt = (aal) => `${b64({ alg: "none" })}.${b64({ sub: "00000000-0000-0000-0000-0000000000a1", aal, exp: 9999999999 })}.sig`;
-const QR = "data:image/svg+xml;utf8," + encodeURIComponent('<svg xmlns="http://www.w3.org/2000/svg" width="10" height="10"><rect width="10" height="10"/></svg>');
+// Shaped like Supabase's real response: unencoded SVG markup containing "#" colours
+const QR = 'data:image/svg+xml;utf-8,<svg xmlns="http://www.w3.org/2000/svg" width="10" height="10" viewBox="0 0 10 10"><rect width="10" height="10" fill="#ffffff"/><rect x="2" y="2" width="6" height="6" fill="#000000"/></svg>';
 
 function serve() {
   const types = { ".html": "text/html", ".js": "text/javascript", ".css": "text/css", ".webp": "image/webp" };
@@ -60,7 +61,7 @@ function serve() {
     }
     if (p === "/auth/v1/user") return json({ id: "00000000-0000-0000-0000-0000000000a1", email: "grc@example.test",
       factors: verified ? [{ id: "f1", factor_type: "totp", status: "verified" }] : [] });
-    if (p === "/auth/v1/factors") return json({ id: "f1", type: "totp", totp: { qr_code: QR, secret: "JBSWY3DPEHPK3PXP" } });
+    if (p === "/auth/v1/factors") return json({ id: "f1", type: "totp", totp: { qr_code: QR, secret: "JBSWY3DPEHPK3PXP", uri: "otpauth://totp/Risk%20Ledger:grc@example.test?secret=JBSWY3DPEHPK3PXP" } });
     if (p === "/auth/v1/factors/f1/challenge") return json({ id: "c1" });
     if (p === "/auth/v1/factors/f1/verify") {
       if (body.code !== "123456") return json({ msg: "Invalid TOTP code entered" }, 422);
@@ -114,6 +115,8 @@ function serve() {
   await step("MFA setup shows a QR code", async () => {
     await page.fill("#password", "correct horse"); await page.click("button[type=submit]");
     await see("Set up MFA"); await page.locator("img.qr").waitFor();
+    const ok = await page.locator("img.qr").evaluate((img) => img.complete && img.naturalWidth > 0);
+    if (!ok) throw new Error("QR code image did not load");
   });
   await step("wrong MFA code is refused", async () => {
     await page.fill("#code", "000000"); await page.click("button[type=submit]"); await see("That code didn't work");
@@ -143,8 +146,8 @@ function serve() {
     await page.click("nav >> text=Audit history"); await page.click("text=Verify the hash chain"); await see("Intact: 64 rows verified");
     if (await page.evaluate(() => document.documentElement.scrollWidth > window.innerWidth + 1)) throw new Error("audit page scrolls sideways");
   });
-  await step("light mode", async () => {
-    await page.click("text=Light mode"); await page.waitForFunction(() => document.documentElement.dataset.theme === "light");
+  await step("dark mode", async () => {
+    await page.click("text=Dark mode"); await page.waitForFunction(() => document.documentElement.dataset.theme !== "light");
     await page.click("nav >> text=Dashboard"); await see("Control health");
   });
   await step("phone width has no sideways scroll", async () => {

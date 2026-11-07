@@ -189,6 +189,16 @@
     return authLayout(form);
   }
 
+  // Supabase returns the QR code as an SVG data URL with the markup unencoded. Characters
+  // such as "#" in it end the URL early and the image breaks, so encode the markup.
+  function qrSrc(raw) {
+    const m = /^data:image\/svg\+xml;(?:utf-?8|charset=utf-?8),/i.exec(raw || "");
+    if (!m) return raw;
+    let body = raw.slice(m[0].length);
+    try { if (!body.includes("<")) body = decodeURIComponent(body); } catch (_) { /* leave as is */ }
+    return "data:image/svg+xml;charset=utf-8," + encodeURIComponent(body);
+  }
+
   async function mfaEnrollView() {
     let factor;
     try {
@@ -217,8 +227,10 @@
       h("h2", {}, "Set up MFA"),
       h("p", { class: "sub" }, "Scan this with an authenticator app (Google Authenticator, 1Password, Authy), then enter the 6-digit code."),
       err,
-      h("img", { class: "qr", src: factor.totp.qr_code, alt: "QR code for your authenticator app" }),
-      h("p", { class: "secret mono" }, factor.totp.secret),
+      h("img", { class: "qr", src: qrSrc(factor.totp.qr_code), alt: "QR code for your authenticator app" }),
+      factor.totp.uri ? h("p", { class: "center" }, h("a", { href: factor.totp.uri }, "On this phone? Tap here to add it to your authenticator app")) : null,
+      h("p", { class: "faint center" }, "Can't scan? In your app choose \u201cEnter a setup key\u201d and type this key:"),
+      h("p", { class: "secret mono" }, (factor.totp.secret || "").replace(/(.{4})/g, "$1 ").trim()),
       h("div", { class: "field" }, h("label", { for: "code" }, "6-digit code"), code),
       h("div", { class: "actions" },
         h("button", { class: "btn primary", type: "submit" }, "Turn on MFA"),
@@ -559,14 +571,16 @@
   function closeDrawer() { const d = document.getElementById("drawer"); if (d) d.remove(); }
   document.addEventListener("keydown", (e) => { if (e.key === "Escape") closeDrawer(); });
 
-  function applyTheme(t) { if (t === "light") document.documentElement.dataset.theme = "light"; else delete document.documentElement.dataset.theme; }
+  // Light (the pastel phoenix) is the default; dark is an option a viewer can switch to
+  function applyTheme(t) { if (t === "dark") delete document.documentElement.dataset.theme; else document.documentElement.dataset.theme = "light"; }
   function toggleTheme() {
     const next = document.documentElement.dataset.theme === "light" ? "dark" : "light";
     applyTheme(next);
     try { localStorage.setItem(THEME_KEY, next); } catch (_) { /* fine */ }
     render();
   }
-  try { applyTheme(localStorage.getItem(THEME_KEY)); } catch (_) { /* default dark */ }
+  applyTheme("light");
+  try { applyTheme(localStorage.getItem(THEME_KEY)); } catch (_) { /* default light */ }
 
   render().catch((x) => app.replaceChildren(h("div", { class: "main" }, h("div", { class: "error" }, x.message))));
 })();

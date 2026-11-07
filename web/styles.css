@@ -207,7 +207,7 @@ pre { background: var(--bg-sunken); border: 1px solid var(--border); border-radi
 /* ---------- Phoenix background (artwork: web/phoenix-*.webp) ---------- */
 .phoenix-bg {
   position: fixed; inset: -6%; z-index: 0; pointer-events: none;
-  background: url("phoenix-dark.webp") 62% 45% / cover no-repeat;
+  background: url("phoenix-dark.webp") 60% 18% / cover no-repeat;
   opacity: 0.16; transform-origin: 60% 50%;
   animation: phoenix-glide 12s ease-in-out infinite alternate;
 }
@@ -227,3 +227,6 @@ body:has(.auth) .auth-side { background: linear-gradient(90deg, color-mix(in srg
   .phoenix-bg { animation: phoenix-breathe 8s ease-in-out infinite alternate; }
   @keyframes phoenix-breathe { from { filter: brightness(0.92); } to { filter: brightness(1.12); } }
 }
+
+.center { text-align: center; }
+.secret { text-align: center; letter-spacing: 0.08em; user-select: all; }
