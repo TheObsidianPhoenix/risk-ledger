@@ -44,15 +44,22 @@ select id, last_result, last_detail from public.control_status order by id;
 
 Expect 7 passes and 5 failures. **SB-03** fails until the GRC analyst sets up MFA; after that, the next run passes, its remediation item closes by evidence, and risk R-01 becomes ready to close.
 
-## Optional: run the tests every day
+## Run the tests every day
 
-Supabase includes the `pg_cron` scheduler (**Database → Extensions → pg_cron**). After enabling it:
+Paste [`supabase/migrations/004_daily_schedule.sql`](../supabase/migrations/004_daily_schedule.sql) into the SQL Editor and click **Run**. It turns on `pg_cron`, the scheduler built into Supabase's Postgres, and runs the control tests at 15:00 UTC every day. Scheduled runs are recorded with no user, and the audit log shows them as `system via engine`.
 
-```sql
-select cron.schedule('risk-ledger-daily', '0 15 * * *', $$select public.run_control_tests()$$);
-```
+### Check the schedule from outside
 
-Scheduled runs are recorded with no user, and the audit log shows them as `system via engine`.
+A scheduler that stops quietly is worse than none. [`scripts/daily-check.sh`](../scripts/daily-check.sh) signs in as the **read-only auditor**, confirms a test run happened in the last 26 hours and prints how many controls pass. The **Daily control-test check** workflow runs it every day; if the schedule stops, the workflow fails and GitHub emails the repository owner.
+
+It needs two repository secrets (**Settings → Secrets and variables → Actions → New repository secret**):
+
+| Name | Value |
+|---|---|
+| `AUDITOR_EMAIL` | the auditor account's email |
+| `AUDITOR_PASSWORD` | the auditor account's password |
+
+The auditor can read but never change anything, so these are the lowest-privilege credentials that can do the job. Never store a GRC analyst's password or a secret key here.
 
 ## Upgrading an existing project
 

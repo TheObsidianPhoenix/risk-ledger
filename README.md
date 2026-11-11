@@ -19,6 +19,7 @@ Source systems ──► Control tests ──► Evidence ──► Remediation 
 - **Every control says how it lowers risk.** "How does this actually lower risk?" is the first question to ask about any control, so it's a required field.
 - **A failed test opens remediation work** for the control's owner, due in 7 to 60 days by severity. **Only passing evidence can close it.** Nobody can mark a fix done by hand.
 - **Risks follow their controls.** A risk becomes *ready to close* only when every linked control's latest evidence passes, and a GRC analyst closes it with a note. The trend view shows the register shrinking.
+- **It runs every day by itself.** A scheduler inside the database runs every test daily, and a separate daily check from outside (signed in as the read-only auditor) fails loudly if the schedule ever stops.
 - **Risk acceptance expires.** An accepted gap needs a reason and an end date within 180 days; after that, the next test run reopens it.
 
 ## The web page
