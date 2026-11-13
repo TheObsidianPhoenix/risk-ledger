@@ -11,6 +11,7 @@ insert into public.systems (id, name, category, live, note) values
   ('hris',             'HR system',           'People',           false, 'Mock: terminations with access-removal times'),
   ('lms',              'Security training',   'People',           false, 'Mock: training completion by employee'),
   ('vendor_mgmt',      'Vendor management',   'Third parties',    false, 'Mock: vendor reviews and renewal dates'),
+  ('vuln_mgmt',        'Vulnerability scanner', 'Engineering',    false, 'Mock: shaped like a vulnerability scanner''s open-findings API'),
   ('supabase',         'Supabase (this project)', 'Platform',     true,  'Live: read directly from this database');
 
 insert into public.source_snapshots (system_id, collected_at, data) values
@@ -44,6 +45,10 @@ insert into public.source_snapshots (system_id, collected_at, data) values
 ('lms', now(), jsonb_build_object('employees',
   (select jsonb_agg(jsonb_build_object('id', 'emp-' || lpad(g::text, 3, '0'), 'active', true, 'training_complete', g > 4))
      from generate_series(1, 50) g))),
+('vuln_mgmt', now(), jsonb_build_object('findings', jsonb_build_array(
+  jsonb_build_object('id', 'VULN-2291', 'title', 'Outdated OpenSSL on web-03', 'severity', 'critical', 'open', true, 'opened_at', now() - interval '45 days'),
+  jsonb_build_object('id', 'VULN-2297', 'title', 'Missing patch on build runner', 'severity', 'high', 'open', true, 'opened_at', now() - interval '10 days'),
+  jsonb_build_object('id', 'VULN-2301', 'title', 'Deprecated TLS cipher on lb-02', 'severity', 'medium', 'open', false, 'opened_at', now() - interval '60 days')))),
 ('vendor_mgmt', now(), jsonb_build_object('vendors', jsonb_build_array(
   jsonb_build_object('name', 'Payroll provider', 'critical', true,  'review_completed_at', now() - interval '20 days', 'renewal_date', now() + interval '45 days'),
   jsonb_build_object('name', 'Cloud email',      'critical', true,  'review_completed_at', now() - interval '80 days', 'renewal_date', now() - interval '10 days'),
@@ -68,48 +73,62 @@ insert into public.risks (id, title, description, likelihood, impact, owner_name
 -- Controls: the test, how it lowers risk, and where the evidence comes from.
 -- Approved at setup by the system owner; anything added later starts as a draft.
 insert into public.controls (id, title, risk_reduced, risk_id, source_system, test_kind, rule, live_check, test_logic,
-                             frequency_days, severity, owner_name, soc2, iso27001, status, approved_by_name, approved_at) values
+                             frequency_days, severity, owner_name, soc2, iso27001, routes_to_team, status, approved_by_name, approved_at) values
   ('CC-01', 'MFA enforced for privileged users',
    'A stolen password alone can''t take over an admin account.', 'R-01', 'okta', 'rule',
    '{"type":"all_match","collection":"users","where":{"privileged":true},"field":"mfa_enabled","equals":true}', null,
-   'Every Okta user marked privileged has MFA enabled', 7, 'critical', 'IT', '{CC6.1}', '{A.8.5}', 'active', 'Jasmine Alexander (setup)', now()),
+   'Every Okta user marked privileged has MFA enabled', 7, 'critical', 'IT', '{CC6.1}', '{A.8.5}', null, 'active', 'Jasmine Alexander (setup)', now()),
   ('CC-02', 'Access removed within 1 day of termination',
    'Shrinks the window in which a former employee could still log in.', 'R-02', 'hris', 'rule',
    '{"type":"within_days","collection":"terminations","from_field":"terminated_at","to_field":"access_removed_at","max_days":1}', null,
-   'Every termination has access removed no more than 1 day later', 7, 'high', 'IT', '{CC6.2}', '{A.5.18,A.6.5}', 'active', 'Jasmine Alexander (setup)', now()),
+   'Every termination has access removed no more than 1 day later', 7, 'high', 'IT', '{CC6.2}', '{A.5.18,A.6.5}', 'hr', 'active', 'Jasmine Alexander (setup)', now()),
   ('CC-03', 'Cloud storage encryption enabled',
    'Stolen storage media or snapshots are unreadable.', 'R-03', 'aws', 'rule',
    '{"type":"all_match","collection":"buckets","field":"encrypted","equals":true}', null,
-   'Every AWS bucket has default encryption', 30, 'high', 'Platform Engineering', '{CC6.1}', '{A.8.24}', 'active', 'Jasmine Alexander (setup)', now()),
+   'Every AWS bucket has default encryption', 30, 'high', 'Platform Engineering', '{CC6.1}', '{A.8.24}', null, 'active', 'Jasmine Alexander (setup)', now()),
   ('CC-04', 'Public storage buckets prohibited',
    'Data can''t leak just because someone made a bucket public.', 'R-03', 'gcp', 'rule',
    '{"type":"none_match","collection":"buckets","field":"public","equals":true}', null,
-   'No Google Cloud bucket is public', 1, 'critical', 'Platform Engineering', '{CC6.1,CC6.6}', '{A.8.3}', 'active', 'Jasmine Alexander (setup)', now()),
+   'No Google Cloud bucket is public', 1, 'critical', 'Platform Engineering', '{CC6.1,CC6.6}', '{A.8.3}', null, 'active', 'Jasmine Alexander (setup)', now()),
   ('CC-05', 'Logging enabled for critical systems',
    'Incidents on critical systems can be detected and investigated.', 'R-04', 'aws', 'rule',
    '{"type":"all_match","collection":"trails","where":{"critical":true},"field":"logging_enabled","equals":true}', null,
-   'Every critical AWS trail is logging', 7, 'high', 'Security Engineering', '{CC7.2}', '{A.8.15}', 'active', 'Jasmine Alexander (setup)', now()),
+   'Every critical AWS trail is logging', 7, 'high', 'Security Engineering', '{CC7.2}', '{A.8.15}', null, 'active', 'Jasmine Alexander (setup)', now()),
   ('CC-06', 'User access reviewed every 90 days',
    'Stale access is found and removed before someone misuses it.', 'R-02', 'google_workspace', 'rule',
    '{"type":"max_age_days","collection":"access_reviews","field":"last_reviewed_at","max_days":90}', null,
-   'Every in-scope application had an access review in the last 90 days', 30, 'medium', 'IT', '{CC6.2,CC6.3}', '{A.5.18}', 'active', 'Jasmine Alexander (setup)', now()),
+   'Every in-scope application had an access review in the last 90 days', 30, 'medium', 'IT', '{CC6.2,CC6.3}', '{A.5.18}', null, 'active', 'Jasmine Alexander (setup)', now()),
   ('CC-07', 'Security training completion at least 95%',
    'Fewer people click the phishing link that starts most breaches.', 'R-05', 'lms', 'rule',
    '{"type":"percent_match","collection":"employees","where":{"active":true},"field":"training_complete","equals":true,"threshold":0.95}', null,
-   'At least 95% of active employees completed security training', 30, 'medium', 'People Ops', '{CC1.4,CC2.2}', '{A.6.3}', 'active', 'Jasmine Alexander (setup)', now()),
+   'At least 95% of active employees completed security training', 30, 'medium', 'People Ops', '{CC1.4,CC2.2}', '{A.6.3}', null, 'active', 'Jasmine Alexander (setup)', now()),
   ('CC-08', 'Critical vendors reviewed before renewal',
    'We never commit another year to a vendor whose security we haven''t checked.', 'R-06', 'vendor_mgmt', 'rule',
    '{"type":"before_date","collection":"vendors","where":{"critical":true},"field":"review_completed_at","before_field":"renewal_date"}', null,
-   'Every critical vendor''s review was completed before its renewal date', 30, 'medium', 'GRC', '{CC9.2}', '{A.5.19,A.5.22}', 'active', 'Jasmine Alexander (setup)', now()),
+   'Every critical vendor''s review was completed before its renewal date', 30, 'medium', 'GRC', '{CC9.2}', '{A.5.19,A.5.22}', null, 'active', 'Jasmine Alexander (setup)', now()),
+  ('ENG-01', 'Open vulnerability findings remediated within 30 days',
+   'Known exploitable weaknesses don''t sit open long enough to be used against us.', null, 'vuln_mgmt', 'rule',
+   '{"type":"max_age_days","collection":"findings","where":{"open":true},"field":"opened_at","max_days":30}', null,
+   'Every open vulnerability finding is remediated within 30 days of being opened', 7, 'high', 'Platform Engineering', '{CC7.1}', '{A.8.8}', 'engineering', 'active', 'Jasmine Alexander (setup)', now()),
   ('SB-01', 'Row Level Security on every table',
    'A signed-in user can only reach the rows a policy allows, even if the app has a bug.', 'R-07', 'supabase', 'live', null, 'rls_on_all_tables',
-   'Live: every table in the public schema has Row Level Security enabled', 1, 'critical', 'GRC', '{CC6.1}', '{A.8.3}', 'active', 'Jasmine Alexander (setup)', now()),
+   'Live: every table in the public schema has Row Level Security enabled', 1, 'critical', 'GRC', '{CC6.1}', '{A.8.3}', null, 'active', 'Jasmine Alexander (setup)', now()),
   ('SB-04', 'No policy opens a table to everyone',
    'Turning RLS on isn''t enough: a policy of "true" or "any signed-in user" would still expose every row, the pattern behind CVE-2025-48757.', 'R-07', 'supabase', 'live', null, 'no_open_policies',
-   'Live: no policy allows every row, only checks that someone is signed in, or applies to anonymous visitors, and anonymous visitors have no table rights', 1, 'critical', 'GRC', '{CC6.1,CC6.3}', '{A.5.15,A.8.3}', 'active', 'Jasmine Alexander (setup)', now()),
+   'Live: no policy allows every row, only checks that someone is signed in, or applies to anonymous visitors, and anonymous visitors have no table rights', 1, 'critical', 'GRC', '{CC6.1,CC6.3}', '{A.5.15,A.8.3}', null, 'active', 'Jasmine Alexander (setup)', now()),
   ('SB-02', 'Audit log can''t be altered',
    'The record of who did what survives even a mistake or a malicious insider.', 'R-04', 'supabase', 'live', null, 'audit_log_protected',
-   'Live: the audit log blocks updates, deletes and truncation, and no client can write to it', 1, 'high', 'GRC', '{CC7.2}', '{A.8.15}', 'active', 'Jasmine Alexander (setup)', now()),
+   'Live: the audit log blocks updates, deletes and truncation, and no client can write to it', 1, 'high', 'GRC', '{CC7.2}', '{A.8.15}', null, 'active', 'Jasmine Alexander (setup)', now()),
   ('SB-03', 'GRC analysts use MFA',
    'The people who can approve tests and close risks can''t be impersonated with a password alone.', 'R-01', 'supabase', 'live', null, 'grc_analysts_have_mfa',
-   'Live: every user with the GRC analyst role has a verified MFA factor', 1, 'critical', 'GRC', '{CC6.1}', '{A.8.5}', 'active', 'Jasmine Alexander (setup)', now());
+   'Live: every user with the GRC analyst role has a verified MFA factor', 1, 'critical', 'GRC', '{CC6.1}', '{A.8.5}', null, 'active', 'Jasmine Alexander (setup)', now());
+
+-- Employee/training roster the compliance agent scans. Dates are relative to today so the
+-- demo always has something within 30 days (and one already overdue) no matter when it runs.
+insert into public.employees (name, email, manager_name, manager_email, department, training_due_at, policy_ack_due_at) values
+  ('Morgan Reyes',   'morgan.reyes@obsidianphoenix.example',   'Dana Whitfield', 'dana.whitfield@obsidianphoenix.example', 'Sales',       current_date - 4,  current_date + 70),
+  ('Priya Natarajan','priya.natarajan@obsidianphoenix.example','Sam Okafor',     'sam.okafor@obsidianphoenix.example',     'Engineering', current_date + 12, current_date + 90),
+  ('Diego Fernandez','diego.fernandez@obsidianphoenix.example','Dana Whitfield', 'dana.whitfield@obsidianphoenix.example', 'Sales',       current_date + 95, current_date + 21),
+  ('Lena Kowalski',  'lena.kowalski@obsidianphoenix.example',  'Sam Okafor',     'sam.okafor@obsidianphoenix.example',     'Engineering', current_date + 120, current_date + 180),
+  ('Theo Marchetti', 'theo.marchetti@obsidianphoenix.example', 'Ruth Abara',     'ruth.abara@obsidianphoenix.example',     'Finance',     current_date + 60, current_date + 150),
+  ('Aisha Bello',    'aisha.bello@obsidianphoenix.example',    'Ruth Abara',     'ruth.abara@obsidianphoenix.example',     'Finance',     current_date + 150, current_date + 60);

@@ -79,6 +79,7 @@ create table public.controls (
   owner_name     text not null default '',
   soc2           text[] not null default '{}',
   iso27001       text[] not null default '{}',
+  routes_to_team text check (routes_to_team in ('engineering', 'hr')),   -- who gets looped in when this fails, beyond the owner
   status         text not null default 'draft' check (status in ('draft', 'active', 'retired')),
   drafted_by     text not null default 'human' check (drafted_by in ('human', 'ai')),
   approved_by    uuid references public.profiles(id),
@@ -163,13 +164,45 @@ create table public.activity_log (
   at         timestamptz not null default clock_timestamp(),
   actor      uuid not null references auth.users(id),
   actor_role text not null,
-  action     text not null check (action in ('sign_in', 'sign_out', 'view', 'view_detail')),
+  action     text not null check (action in ('sign_in', 'sign_out', 'view', 'view_detail', 'scan')),
   view       text check (char_length(view) <= 40),
   detail     text check (char_length(detail) <= 200),
   prev_hash  text not null,
   hash       text not null
 );
 comment on table public.activity_log is 'Every sign-in, sign-out, page view and record opened, written by the browser itself. Append-only and hash-chained like audit_log, but kept in its own table and its own chain so session activity never dilutes the record of actual data changes.';
+
+-- ---------------------------------------------------------------------------
+-- Compliance agent: a mock HR/training roster, and the reminders it drafts
+-- ---------------------------------------------------------------------------
+create table public.employees (
+  id               bigint generated always as identity primary key,
+  name             text not null,
+  email            text not null,
+  manager_name     text not null,
+  manager_email    text not null,
+  department       text not null default '',
+  training_due_at    date not null,   -- next time annual security training is due
+  policy_ack_due_at  date not null    -- next time this person must re-acknowledge policy
+);
+comment on table public.employees is 'Mock HR/training roster the compliance agent scans. Fictional, like the other source data.';
+
+create table public.compliance_reminders (
+  id              bigint generated always as identity primary key,
+  employee_id     bigint not null references public.employees(id),
+  reason          text not null check (reason in ('security_training', 'policy_ack')),
+  due_date        date not null,
+  subject         text not null,
+  body            text not null,
+  status          text not null default 'drafted' check (status in ('drafted', 'edited', 'sent', 'dismissed')),
+  drafted_by      text not null default 'ai' check (drafted_by in ('ai', 'human')),
+  created_at      timestamptz not null default now(),
+  updated_at      timestamptz,
+  sent_at         timestamptz,
+  sent_simulated  boolean not null default true,   -- there's no email service wired up; a "send" is simulated and recorded as such
+  unique (employee_id, reason, due_date)
+);
+comment on table public.compliance_reminders is 'Drafted by the compliance agent when it signs someone in and finds a lapsing training or policy acknowledgment. A person always reviews before anything is "sent".';
 
 create index on public.evidence (control_id, tested_at desc);
 create index on public.remediation (control_id) where status in ('open', 'in_progress', 'risk_accepted');
@@ -601,6 +634,85 @@ begin
   values (auth.uid(), public.my_role()::text, p_action, p_view, p_detail);
 end $$;
 
+-- ---------------------------------------------------------------------------
+-- Compliance agent: scans the HR/training roster for lapses within 30 days
+-- and drafts a reminder (never sends anything on its own)
+-- ---------------------------------------------------------------------------
+create function public.draft_reminder_text(p_name text, p_reason text, p_due date, p_manager text)
+returns table (subject text, body text)
+language sql immutable set search_path = public as $$
+  select
+    case p_reason when 'security_training' then 'Action needed: your annual security training is due ' || p_due
+                  else 'Action needed: your policy acknowledgment is due ' || p_due end,
+    'Hi ' || p_name || ', our records show your '
+      || case p_reason when 'security_training' then 'annual security training' else 'policy acknowledgment' end
+      || ' is due on ' || p_due || '. Please complete it soon to stay in compliance. I''ve copied ' || p_manager
+      || ' so they''re aware.' || E'\n\n' || '— Automated compliance reminder, drafted by Risk Ledger''s compliance agent. '
+      || 'Nothing is sent until a GRC analyst reviews and approves it.'
+$$;
+
+create function public.scan_compliance_lapses() returns int
+language plpgsql volatile security definer set search_path = public as $$
+declare
+  e record; t record; drafted int := 0;
+begin
+  perform public.require_role(array['grc_analyst', 'auditor']::public.app_role[]);
+  for e in select * from public.employees where training_due_at <= current_date + 30 loop
+    select * into t from public.draft_reminder_text(e.name, 'security_training', e.training_due_at, e.manager_name);
+    insert into public.compliance_reminders (employee_id, reason, due_date, subject, body)
+    values (e.id, 'security_training', e.training_due_at, t.subject, t.body)
+    on conflict (employee_id, reason, due_date) do nothing;
+    if found then drafted := drafted + 1; end if;
+  end loop;
+  for e in select * from public.employees where policy_ack_due_at <= current_date + 30 loop
+    select * into t from public.draft_reminder_text(e.name, 'policy_ack', e.policy_ack_due_at, e.manager_name);
+    insert into public.compliance_reminders (employee_id, reason, due_date, subject, body)
+    values (e.id, 'policy_ack', e.policy_ack_due_at, t.subject, t.body)
+    on conflict (employee_id, reason, due_date) do nothing;
+    if found then drafted := drafted + 1; end if;
+  end loop;
+  -- The scan itself is logged (hash-chained) even when it drafts nothing, so there's
+  -- audit evidence the check ran, not just evidence of what it found.
+  perform public.log_activity('scan', 'compliance_agent', drafted || ' new reminder(s) drafted');
+  return drafted;
+end $$;
+
+create function public.edit_compliance_reminder(p_id bigint, p_subject text, p_body text) returns void
+language plpgsql volatile security definer set search_path = public as $$
+declare r record;
+begin
+  perform public.require_role(array['grc_analyst', 'auditor']::public.app_role[]);
+  select * into r from public.compliance_reminders where id = p_id for update;
+  if r is null then raise exception 'No reminder %', p_id; end if;
+  if r.status in ('sent', 'dismissed') then raise exception 'This reminder is already %, and can''t be edited', r.status; end if;
+  update public.compliance_reminders
+     set subject = p_subject, body = p_body, status = 'edited', updated_at = now()
+   where id = p_id;
+end $$;
+
+create function public.send_compliance_reminder(p_id bigint) returns void
+language plpgsql volatile security definer set search_path = public as $$
+declare r record;
+begin
+  perform public.require_role(array['grc_analyst', 'auditor']::public.app_role[]);
+  select * into r from public.compliance_reminders where id = p_id for update;
+  if r is null then raise exception 'No reminder %', p_id; end if;
+  if r.status in ('sent', 'dismissed') then raise exception 'This reminder is already %', r.status; end if;
+  -- No email service is wired up: this is a simulated send, recorded as such, not a real email.
+  update public.compliance_reminders set status = 'sent', sent_at = now(), sent_simulated = true where id = p_id;
+end $$;
+
+create function public.dismiss_compliance_reminder(p_id bigint) returns void
+language plpgsql volatile security definer set search_path = public as $$
+declare r record;
+begin
+  perform public.require_role(array['grc_analyst', 'auditor']::public.app_role[]);
+  select * into r from public.compliance_reminders where id = p_id for update;
+  if r is null then raise exception 'No reminder %', p_id; end if;
+  if r.status in ('sent', 'dismissed') then raise exception 'This reminder is already %', r.status; end if;
+  update public.compliance_reminders set status = 'dismissed', updated_at = now() where id = p_id;
+end $$;
+
 -- Anyone allowed to read the activity log can check that nobody has altered it
 create function public.verify_activity_chain(out rows_checked bigint, out first_broken_id bigint)
 language plpgsql stable security definer set search_path = public as $$
@@ -733,6 +845,7 @@ create trigger audit_remediation after insert or update or delete on public.reme
 create trigger audit_profiles after insert or update or delete on public.profiles for each row execute function public.audit();
 create trigger audit_evidence after insert on public.evidence for each row execute function public.audit();
 create trigger audit_test_runs after insert on public.test_runs for each row execute function public.audit();
+create trigger audit_compliance_reminders after insert or update on public.compliance_reminders for each row execute function public.audit();
 
 -- ---------------------------------------------------------------------------
 -- Evidence and snapshots can't be changed once written
@@ -848,6 +961,8 @@ alter table public.evidence enable row level security;
 alter table public.remediation enable row level security;
 alter table public.audit_log enable row level security;
 alter table public.activity_log enable row level security;
+alter table public.employees enable row level security;
+alter table public.compliance_reminders enable row level security;
 
 create policy "see yourself; GRC and auditors see everyone" on public.profiles for select to authenticated
   using (id = auth.uid() or public.my_role() in ('grc_analyst', 'auditor'));
@@ -878,6 +993,11 @@ create policy "GRC and auditors read the audit log" on public.audit_log for sele
 create policy "GRC and auditors read the activity log" on public.activity_log for select to authenticated
   using (public.my_role() in ('grc_analyst', 'auditor'));
 
+create policy "GRC and auditors read the employee roster" on public.employees for select to authenticated
+  using (public.my_role() in ('grc_analyst', 'auditor'));
+create policy "GRC and auditors read compliance reminders" on public.compliance_reminders for select to authenticated
+  using (public.my_role() in ('grc_analyst', 'auditor'));
+
 -- ---------------------------------------------------------------------------
 -- Grants: nothing for anonymous visitors; read-only for signed-in users, except
 -- the few columns people may change. Every other change goes through a function.
@@ -893,7 +1013,9 @@ grant execute on function public.my_role(), public.run_control_tests(), public.a
   public.close_risk(text, text), public.load_mock_snapshot(text, jsonb), public.verify_audit_chain(),
   public.validate_rule(jsonb, text),
   public.propose_control(text, text, text, text, jsonb, text, text, text, int, text[], text[], text),
-  public.log_activity(text, text, text), public.verify_activity_chain()
+  public.log_activity(text, text, text), public.verify_activity_chain(),
+  public.scan_compliance_lapses(), public.edit_compliance_reminder(bigint, text, text),
+  public.send_compliance_reminder(bigint), public.dismiss_compliance_reminder(bigint)
   to authenticated;
 
 -- Keep future objects closed by default, too
@@ -914,6 +1036,7 @@ insert into public.systems (id, name, category, live, note) values
   ('hris',             'HR system',           'People',           false, 'Mock: terminations with access-removal times'),
   ('lms',              'Security training',   'People',           false, 'Mock: training completion by employee'),
   ('vendor_mgmt',      'Vendor management',   'Third parties',    false, 'Mock: vendor reviews and renewal dates'),
+  ('vuln_mgmt',        'Vulnerability scanner', 'Engineering',    false, 'Mock: shaped like a vulnerability scanner''s open-findings API'),
   ('supabase',         'Supabase (this project)', 'Platform',     true,  'Live: read directly from this database');
 
 insert into public.source_snapshots (system_id, collected_at, data) values
@@ -947,6 +1070,10 @@ insert into public.source_snapshots (system_id, collected_at, data) values
 ('lms', now(), jsonb_build_object('employees',
   (select jsonb_agg(jsonb_build_object('id', 'emp-' || lpad(g::text, 3, '0'), 'active', true, 'training_complete', g > 4))
      from generate_series(1, 50) g))),
+('vuln_mgmt', now(), jsonb_build_object('findings', jsonb_build_array(
+  jsonb_build_object('id', 'VULN-2291', 'title', 'Outdated OpenSSL on web-03', 'severity', 'critical', 'open', true, 'opened_at', now() - interval '45 days'),
+  jsonb_build_object('id', 'VULN-2297', 'title', 'Missing patch on build runner', 'severity', 'high', 'open', true, 'opened_at', now() - interval '10 days'),
+  jsonb_build_object('id', 'VULN-2301', 'title', 'Deprecated TLS cipher on lb-02', 'severity', 'medium', 'open', false, 'opened_at', now() - interval '60 days')))),
 ('vendor_mgmt', now(), jsonb_build_object('vendors', jsonb_build_array(
   jsonb_build_object('name', 'Payroll provider', 'critical', true,  'review_completed_at', now() - interval '20 days', 'renewal_date', now() + interval '45 days'),
   jsonb_build_object('name', 'Cloud email',      'critical', true,  'review_completed_at', now() - interval '80 days', 'renewal_date', now() - interval '10 days'),
@@ -971,50 +1098,64 @@ insert into public.risks (id, title, description, likelihood, impact, owner_name
 -- Controls: the test, how it lowers risk, and where the evidence comes from.
 -- Approved at setup by the system owner; anything added later starts as a draft.
 insert into public.controls (id, title, risk_reduced, risk_id, source_system, test_kind, rule, live_check, test_logic,
-                             frequency_days, severity, owner_name, soc2, iso27001, status, approved_by_name, approved_at) values
+                             frequency_days, severity, owner_name, soc2, iso27001, routes_to_team, status, approved_by_name, approved_at) values
   ('CC-01', 'MFA enforced for privileged users',
    'A stolen password alone can''t take over an admin account.', 'R-01', 'okta', 'rule',
    '{"type":"all_match","collection":"users","where":{"privileged":true},"field":"mfa_enabled","equals":true}', null,
-   'Every Okta user marked privileged has MFA enabled', 7, 'critical', 'IT', '{CC6.1}', '{A.8.5}', 'active', 'Jasmine Alexander (setup)', now()),
+   'Every Okta user marked privileged has MFA enabled', 7, 'critical', 'IT', '{CC6.1}', '{A.8.5}', null, 'active', 'Jasmine Alexander (setup)', now()),
   ('CC-02', 'Access removed within 1 day of termination',
    'Shrinks the window in which a former employee could still log in.', 'R-02', 'hris', 'rule',
    '{"type":"within_days","collection":"terminations","from_field":"terminated_at","to_field":"access_removed_at","max_days":1}', null,
-   'Every termination has access removed no more than 1 day later', 7, 'high', 'IT', '{CC6.2}', '{A.5.18,A.6.5}', 'active', 'Jasmine Alexander (setup)', now()),
+   'Every termination has access removed no more than 1 day later', 7, 'high', 'IT', '{CC6.2}', '{A.5.18,A.6.5}', 'hr', 'active', 'Jasmine Alexander (setup)', now()),
   ('CC-03', 'Cloud storage encryption enabled',
    'Stolen storage media or snapshots are unreadable.', 'R-03', 'aws', 'rule',
    '{"type":"all_match","collection":"buckets","field":"encrypted","equals":true}', null,
-   'Every AWS bucket has default encryption', 30, 'high', 'Platform Engineering', '{CC6.1}', '{A.8.24}', 'active', 'Jasmine Alexander (setup)', now()),
+   'Every AWS bucket has default encryption', 30, 'high', 'Platform Engineering', '{CC6.1}', '{A.8.24}', null, 'active', 'Jasmine Alexander (setup)', now()),
   ('CC-04', 'Public storage buckets prohibited',
    'Data can''t leak just because someone made a bucket public.', 'R-03', 'gcp', 'rule',
    '{"type":"none_match","collection":"buckets","field":"public","equals":true}', null,
-   'No Google Cloud bucket is public', 1, 'critical', 'Platform Engineering', '{CC6.1,CC6.6}', '{A.8.3}', 'active', 'Jasmine Alexander (setup)', now()),
+   'No Google Cloud bucket is public', 1, 'critical', 'Platform Engineering', '{CC6.1,CC6.6}', '{A.8.3}', null, 'active', 'Jasmine Alexander (setup)', now()),
   ('CC-05', 'Logging enabled for critical systems',
    'Incidents on critical systems can be detected and investigated.', 'R-04', 'aws', 'rule',
    '{"type":"all_match","collection":"trails","where":{"critical":true},"field":"logging_enabled","equals":true}', null,
-   'Every critical AWS trail is logging', 7, 'high', 'Security Engineering', '{CC7.2}', '{A.8.15}', 'active', 'Jasmine Alexander (setup)', now()),
+   'Every critical AWS trail is logging', 7, 'high', 'Security Engineering', '{CC7.2}', '{A.8.15}', null, 'active', 'Jasmine Alexander (setup)', now()),
   ('CC-06', 'User access reviewed every 90 days',
    'Stale access is found and removed before someone misuses it.', 'R-02', 'google_workspace', 'rule',
    '{"type":"max_age_days","collection":"access_reviews","field":"last_reviewed_at","max_days":90}', null,
-   'Every in-scope application had an access review in the last 90 days', 30, 'medium', 'IT', '{CC6.2,CC6.3}', '{A.5.18}', 'active', 'Jasmine Alexander (setup)', now()),
+   'Every in-scope application had an access review in the last 90 days', 30, 'medium', 'IT', '{CC6.2,CC6.3}', '{A.5.18}', null, 'active', 'Jasmine Alexander (setup)', now()),
   ('CC-07', 'Security training completion at least 95%',
    'Fewer people click the phishing link that starts most breaches.', 'R-05', 'lms', 'rule',
    '{"type":"percent_match","collection":"employees","where":{"active":true},"field":"training_complete","equals":true,"threshold":0.95}', null,
-   'At least 95% of active employees completed security training', 30, 'medium', 'People Ops', '{CC1.4,CC2.2}', '{A.6.3}', 'active', 'Jasmine Alexander (setup)', now()),
+   'At least 95% of active employees completed security training', 30, 'medium', 'People Ops', '{CC1.4,CC2.2}', '{A.6.3}', null, 'active', 'Jasmine Alexander (setup)', now()),
   ('CC-08', 'Critical vendors reviewed before renewal',
    'We never commit another year to a vendor whose security we haven''t checked.', 'R-06', 'vendor_mgmt', 'rule',
    '{"type":"before_date","collection":"vendors","where":{"critical":true},"field":"review_completed_at","before_field":"renewal_date"}', null,
-   'Every critical vendor''s review was completed before its renewal date', 30, 'medium', 'GRC', '{CC9.2}', '{A.5.19,A.5.22}', 'active', 'Jasmine Alexander (setup)', now()),
+   'Every critical vendor''s review was completed before its renewal date', 30, 'medium', 'GRC', '{CC9.2}', '{A.5.19,A.5.22}', null, 'active', 'Jasmine Alexander (setup)', now()),
+  ('ENG-01', 'Open vulnerability findings remediated within 30 days',
+   'Known exploitable weaknesses don''t sit open long enough to be used against us.', null, 'vuln_mgmt', 'rule',
+   '{"type":"max_age_days","collection":"findings","where":{"open":true},"field":"opened_at","max_days":30}', null,
+   'Every open vulnerability finding is remediated within 30 days of being opened', 7, 'high', 'Platform Engineering', '{CC7.1}', '{A.8.8}', 'engineering', 'active', 'Jasmine Alexander (setup)', now()),
   ('SB-01', 'Row Level Security on every table',
    'A signed-in user can only reach the rows a policy allows, even if the app has a bug.', 'R-07', 'supabase', 'live', null, 'rls_on_all_tables',
-   'Live: every table in the public schema has Row Level Security enabled', 1, 'critical', 'GRC', '{CC6.1}', '{A.8.3}', 'active', 'Jasmine Alexander (setup)', now()),
+   'Live: every table in the public schema has Row Level Security enabled', 1, 'critical', 'GRC', '{CC6.1}', '{A.8.3}', null, 'active', 'Jasmine Alexander (setup)', now()),
   ('SB-04', 'No policy opens a table to everyone',
    'Turning RLS on isn''t enough: a policy of "true" or "any signed-in user" would still expose every row, the pattern behind CVE-2025-48757.', 'R-07', 'supabase', 'live', null, 'no_open_policies',
-   'Live: no policy allows every row, only checks that someone is signed in, or applies to anonymous visitors, and anonymous visitors have no table rights', 1, 'critical', 'GRC', '{CC6.1,CC6.3}', '{A.5.15,A.8.3}', 'active', 'Jasmine Alexander (setup)', now()),
+   'Live: no policy allows every row, only checks that someone is signed in, or applies to anonymous visitors, and anonymous visitors have no table rights', 1, 'critical', 'GRC', '{CC6.1,CC6.3}', '{A.5.15,A.8.3}', null, 'active', 'Jasmine Alexander (setup)', now()),
   ('SB-02', 'Audit log can''t be altered',
    'The record of who did what survives even a mistake or a malicious insider.', 'R-04', 'supabase', 'live', null, 'audit_log_protected',
-   'Live: the audit log blocks updates, deletes and truncation, and no client can write to it', 1, 'high', 'GRC', '{CC7.2}', '{A.8.15}', 'active', 'Jasmine Alexander (setup)', now()),
+   'Live: the audit log blocks updates, deletes and truncation, and no client can write to it', 1, 'high', 'GRC', '{CC7.2}', '{A.8.15}', null, 'active', 'Jasmine Alexander (setup)', now()),
   ('SB-03', 'GRC analysts use MFA',
    'The people who can approve tests and close risks can''t be impersonated with a password alone.', 'R-01', 'supabase', 'live', null, 'grc_analysts_have_mfa',
-   'Live: every user with the GRC analyst role has a verified MFA factor', 1, 'critical', 'GRC', '{CC6.1}', '{A.8.5}', 'active', 'Jasmine Alexander (setup)', now());
+   'Live: every user with the GRC analyst role has a verified MFA factor', 1, 'critical', 'GRC', '{CC6.1}', '{A.8.5}', null, 'active', 'Jasmine Alexander (setup)', now());
+
+-- Employee/training roster the compliance agent scans. Dates are relative to today so the
+-- demo always has something within 30 days (and one already overdue) no matter when it runs.
+insert into public.employees (name, email, manager_name, manager_email, department, training_due_at, policy_ack_due_at) values
+  ('Morgan Reyes',   'morgan.reyes@obsidianphoenix.example',   'Dana Whitfield', 'dana.whitfield@obsidianphoenix.example', 'Sales',       current_date - 4,  current_date + 70),
+  ('Priya Natarajan','priya.natarajan@obsidianphoenix.example','Sam Okafor',     'sam.okafor@obsidianphoenix.example',     'Engineering', current_date + 12, current_date + 90),
+  ('Diego Fernandez','diego.fernandez@obsidianphoenix.example','Dana Whitfield', 'dana.whitfield@obsidianphoenix.example', 'Sales',       current_date + 95, current_date + 21),
+  ('Lena Kowalski',  'lena.kowalski@obsidianphoenix.example',  'Sam Okafor',     'sam.okafor@obsidianphoenix.example',     'Engineering', current_date + 120, current_date + 180),
+  ('Theo Marchetti', 'theo.marchetti@obsidianphoenix.example', 'Ruth Abara',     'ruth.abara@obsidianphoenix.example',     'Finance',     current_date + 60, current_date + 150),
+  ('Aisha Bello',    'aisha.bello@obsidianphoenix.example',    'Ruth Abara',     'ruth.abara@obsidianphoenix.example',     'Finance',     current_date + 150, current_date + 60);
 
 commit;

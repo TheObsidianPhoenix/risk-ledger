@@ -46,6 +46,7 @@ function serve() {
 
   let verified = false;
   const risks = fixture("risks");
+  const complianceReminders = fixture("compliance_reminders");
   await page.route("https://*.supabase.co/**", async (route) => {
     const req = route.request();
     const url = new URL(req.url());
@@ -76,6 +77,22 @@ function serve() {
       if (fn === "verify_audit_chain") return json(fixture("verify_audit_chain"));
       if (fn === "verify_activity_chain") return json(fixture("verify_activity_chain"));
       if (fn === "log_activity") return json(null);
+      if (fn === "scan_compliance_lapses") return json(0);   // fixture already has the drafts pre-scanned
+      if (fn === "edit_compliance_reminder") {
+        const r = complianceReminders.find((x) => x.id === body.p_id);
+        Object.assign(r, { subject: body.p_subject, body: body.p_body, status: "edited" });
+        return json(null);
+      }
+      if (fn === "send_compliance_reminder") {
+        const r = complianceReminders.find((x) => x.id === body.p_id);
+        Object.assign(r, { status: "sent", sent_at: new Date().toISOString() });
+        return json(null);
+      }
+      if (fn === "dismiss_compliance_reminder") {
+        const r = complianceReminders.find((x) => x.id === body.p_id);
+        Object.assign(r, { status: "dismissed" });
+        return json(null);
+      }
       if (fn === "close_risk") {
         const r = risks.find((x) => x.id === body.p_id);
         Object.assign(r, { status: "closed", close_note: body.p_note, closed_at: new Date().toISOString() });
@@ -89,7 +106,7 @@ function serve() {
       const row = fixture("remediation").find((r) => r.id === id);
       return json([{ ...row, ...body }]);
     }
-    let rows = table === "risks" ? risks : fixture(table);
+    let rows = table === "risks" ? risks : table === "compliance_reminders" ? complianceReminders : fixture(table);
     for (const [k, v] of url.searchParams) {
       if (["select", "order", "limit"].includes(k)) continue;
       if (v.startsWith("eq.")) rows = rows.filter((r) => String(r[k]) === v.slice(3));
@@ -127,6 +144,20 @@ function serve() {
     await page.fill("#code", "123456"); await page.click("button[type=submit]");
     await see("Control health"); await see("Controls passing"); await see("8/12");
   });
+  await step("compliance agent panel greets with drafts", async () => {
+    await see("Compliance agent"); await see("Morgan Reyes"); await see("Diego Fernandez");
+  });
+  await step("compliance agent: edit and send a draft", async () => {
+    await page.locator(".compliance-item", { hasText: "Diego Fernandez" }).getByText("Review / edit").click();
+    await see("Save & send now");
+    await page.fill("#csubject", "Edited: policy ack due soon");
+    await page.click("text=Save & send now (simulated)");
+    await see("Sent (simulated)");
+  });
+  await step("compliance agent: dismiss the remaining draft", async () => {
+    await page.locator(".compliance-item", { hasText: "Morgan Reyes" }).getByText("Dismiss").click();
+    await see("Nothing lapsing in the next 30 days.");
+  });
   await step("run tests", async () => { await page.click("text=Run tests now"); await see("Test run complete"); });
   await step("controls table", async () => { await page.click("nav >> text=Controls"); await see("SB-04"); await see("SOC 2"); });
   await step("control evidence drawer", async () => {
@@ -138,6 +169,10 @@ function serve() {
     await page.click("nav >> text=Remediation"); await see("Only passing evidence closes an item");
     await page.click("text=Update >> nth=0"); await page.selectOption("#rstatus", "in_progress");
     await page.fill("#rnote", "Bucket policy change in review"); await page.click("text=Save"); await see("Saved and recorded");
+  });
+  await step("remediation: cross-team demo is clearly labeled", async () => {
+    await page.click("text=Needs: HR"); await see("Cross-team request"); await see("demo of what could be automated");
+    await page.getByRole("button", { name: "Simulate send" }).click(); await see("Simulated");
   });
   await step("risk register and close a risk", async () => {
     await page.click("nav >> text=Risk register"); await see("Sample history (fictional)");

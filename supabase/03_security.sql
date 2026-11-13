@@ -109,6 +109,7 @@ create trigger audit_remediation after insert or update or delete on public.reme
 create trigger audit_profiles after insert or update or delete on public.profiles for each row execute function public.audit();
 create trigger audit_evidence after insert on public.evidence for each row execute function public.audit();
 create trigger audit_test_runs after insert on public.test_runs for each row execute function public.audit();
+create trigger audit_compliance_reminders after insert or update on public.compliance_reminders for each row execute function public.audit();
 
 -- ---------------------------------------------------------------------------
 -- Evidence and snapshots can't be changed once written
@@ -224,6 +225,8 @@ alter table public.evidence enable row level security;
 alter table public.remediation enable row level security;
 alter table public.audit_log enable row level security;
 alter table public.activity_log enable row level security;
+alter table public.employees enable row level security;
+alter table public.compliance_reminders enable row level security;
 
 create policy "see yourself; GRC and auditors see everyone" on public.profiles for select to authenticated
   using (id = auth.uid() or public.my_role() in ('grc_analyst', 'auditor'));
@@ -254,6 +257,11 @@ create policy "GRC and auditors read the audit log" on public.audit_log for sele
 create policy "GRC and auditors read the activity log" on public.activity_log for select to authenticated
   using (public.my_role() in ('grc_analyst', 'auditor'));
 
+create policy "GRC and auditors read the employee roster" on public.employees for select to authenticated
+  using (public.my_role() in ('grc_analyst', 'auditor'));
+create policy "GRC and auditors read compliance reminders" on public.compliance_reminders for select to authenticated
+  using (public.my_role() in ('grc_analyst', 'auditor'));
+
 -- ---------------------------------------------------------------------------
 -- Grants: nothing for anonymous visitors; read-only for signed-in users, except
 -- the few columns people may change. Every other change goes through a function.
@@ -269,7 +277,9 @@ grant execute on function public.my_role(), public.run_control_tests(), public.a
   public.close_risk(text, text), public.load_mock_snapshot(text, jsonb), public.verify_audit_chain(),
   public.validate_rule(jsonb, text),
   public.propose_control(text, text, text, text, jsonb, text, text, text, int, text[], text[], text),
-  public.log_activity(text, text, text), public.verify_activity_chain()
+  public.log_activity(text, text, text), public.verify_activity_chain(),
+  public.scan_compliance_lapses(), public.edit_compliance_reminder(bigint, text, text),
+  public.send_compliance_reminder(bigint), public.dismiss_compliance_reminder(bigint)
   to authenticated;
 
 -- Keep future objects closed by default, too

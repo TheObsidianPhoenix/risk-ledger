@@ -423,6 +423,85 @@ begin
   values (auth.uid(), public.my_role()::text, p_action, p_view, p_detail);
 end $$;
 
+-- ---------------------------------------------------------------------------
+-- Compliance agent: scans the HR/training roster for lapses within 30 days
+-- and drafts a reminder (never sends anything on its own)
+-- ---------------------------------------------------------------------------
+create function public.draft_reminder_text(p_name text, p_reason text, p_due date, p_manager text)
+returns table (subject text, body text)
+language sql immutable set search_path = public as $$
+  select
+    case p_reason when 'security_training' then 'Action needed: your annual security training is due ' || p_due
+                  else 'Action needed: your policy acknowledgment is due ' || p_due end,
+    'Hi ' || p_name || ', our records show your '
+      || case p_reason when 'security_training' then 'annual security training' else 'policy acknowledgment' end
+      || ' is due on ' || p_due || '. Please complete it soon to stay in compliance. I''ve copied ' || p_manager
+      || ' so they''re aware.' || E'\n\n' || '— Automated compliance reminder, drafted by Risk Ledger''s compliance agent. '
+      || 'Nothing is sent until a GRC analyst reviews and approves it.'
+$$;
+
+create function public.scan_compliance_lapses() returns int
+language plpgsql volatile security definer set search_path = public as $$
+declare
+  e record; t record; drafted int := 0;
+begin
+  perform public.require_role(array['grc_analyst', 'auditor']::public.app_role[]);
+  for e in select * from public.employees where training_due_at <= current_date + 30 loop
+    select * into t from public.draft_reminder_text(e.name, 'security_training', e.training_due_at, e.manager_name);
+    insert into public.compliance_reminders (employee_id, reason, due_date, subject, body)
+    values (e.id, 'security_training', e.training_due_at, t.subject, t.body)
+    on conflict (employee_id, reason, due_date) do nothing;
+    if found then drafted := drafted + 1; end if;
+  end loop;
+  for e in select * from public.employees where policy_ack_due_at <= current_date + 30 loop
+    select * into t from public.draft_reminder_text(e.name, 'policy_ack', e.policy_ack_due_at, e.manager_name);
+    insert into public.compliance_reminders (employee_id, reason, due_date, subject, body)
+    values (e.id, 'policy_ack', e.policy_ack_due_at, t.subject, t.body)
+    on conflict (employee_id, reason, due_date) do nothing;
+    if found then drafted := drafted + 1; end if;
+  end loop;
+  -- The scan itself is logged (hash-chained) even when it drafts nothing, so there's
+  -- audit evidence the check ran, not just evidence of what it found.
+  perform public.log_activity('scan', 'compliance_agent', drafted || ' new reminder(s) drafted');
+  return drafted;
+end $$;
+
+create function public.edit_compliance_reminder(p_id bigint, p_subject text, p_body text) returns void
+language plpgsql volatile security definer set search_path = public as $$
+declare r record;
+begin
+  perform public.require_role(array['grc_analyst', 'auditor']::public.app_role[]);
+  select * into r from public.compliance_reminders where id = p_id for update;
+  if r is null then raise exception 'No reminder %', p_id; end if;
+  if r.status in ('sent', 'dismissed') then raise exception 'This reminder is already %, and can''t be edited', r.status; end if;
+  update public.compliance_reminders
+     set subject = p_subject, body = p_body, status = 'edited', updated_at = now()
+   where id = p_id;
+end $$;
+
+create function public.send_compliance_reminder(p_id bigint) returns void
+language plpgsql volatile security definer set search_path = public as $$
+declare r record;
+begin
+  perform public.require_role(array['grc_analyst', 'auditor']::public.app_role[]);
+  select * into r from public.compliance_reminders where id = p_id for update;
+  if r is null then raise exception 'No reminder %', p_id; end if;
+  if r.status in ('sent', 'dismissed') then raise exception 'This reminder is already %', r.status; end if;
+  -- No email service is wired up: this is a simulated send, recorded as such, not a real email.
+  update public.compliance_reminders set status = 'sent', sent_at = now(), sent_simulated = true where id = p_id;
+end $$;
+
+create function public.dismiss_compliance_reminder(p_id bigint) returns void
+language plpgsql volatile security definer set search_path = public as $$
+declare r record;
+begin
+  perform public.require_role(array['grc_analyst', 'auditor']::public.app_role[]);
+  select * into r from public.compliance_reminders where id = p_id for update;
+  if r is null then raise exception 'No reminder %', p_id; end if;
+  if r.status in ('sent', 'dismissed') then raise exception 'This reminder is already %', r.status; end if;
+  update public.compliance_reminders set status = 'dismissed', updated_at = now() where id = p_id;
+end $$;
+
 -- Anyone allowed to read the activity log can check that nobody has altered it
 create function public.verify_activity_chain(out rows_checked bigint, out first_broken_id bigint)
 language plpgsql stable security definer set search_path = public as $$
