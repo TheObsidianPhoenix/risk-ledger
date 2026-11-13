@@ -74,6 +74,7 @@ create table public.controls (
   owner_name     text not null default '',
   soc2           text[] not null default '{}',
   iso27001       text[] not null default '{}',
+  routes_to_team text check (routes_to_team in ('engineering', 'hr')),   -- who gets looped in when this fails, beyond the owner
   status         text not null default 'draft' check (status in ('draft', 'active', 'retired')),
   drafted_by     text not null default 'human' check (drafted_by in ('human', 'ai')),
   approved_by    uuid references public.profiles(id),
@@ -158,13 +159,45 @@ create table public.activity_log (
   at         timestamptz not null default clock_timestamp(),
   actor      uuid not null references auth.users(id),
   actor_role text not null,
-  action     text not null check (action in ('sign_in', 'sign_out', 'view', 'view_detail')),
+  action     text not null check (action in ('sign_in', 'sign_out', 'view', 'view_detail', 'scan')),
   view       text check (char_length(view) <= 40),
   detail     text check (char_length(detail) <= 200),
   prev_hash  text not null,
   hash       text not null
 );
 comment on table public.activity_log is 'Every sign-in, sign-out, page view and record opened, written by the browser itself. Append-only and hash-chained like audit_log, but kept in its own table and its own chain so session activity never dilutes the record of actual data changes.';
+
+-- ---------------------------------------------------------------------------
+-- Compliance agent: a mock HR/training roster, and the reminders it drafts
+-- ---------------------------------------------------------------------------
+create table public.employees (
+  id               bigint generated always as identity primary key,
+  name             text not null,
+  email            text not null,
+  manager_name     text not null,
+  manager_email    text not null,
+  department       text not null default '',
+  training_due_at    date not null,   -- next time annual security training is due
+  policy_ack_due_at  date not null    -- next time this person must re-acknowledge policy
+);
+comment on table public.employees is 'Mock HR/training roster the compliance agent scans. Fictional, like the other source data.';
+
+create table public.compliance_reminders (
+  id              bigint generated always as identity primary key,
+  employee_id     bigint not null references public.employees(id),
+  reason          text not null check (reason in ('security_training', 'policy_ack')),
+  due_date        date not null,
+  subject         text not null,
+  body            text not null,
+  status          text not null default 'drafted' check (status in ('drafted', 'edited', 'sent', 'dismissed')),
+  drafted_by      text not null default 'ai' check (drafted_by in ('ai', 'human')),
+  created_at      timestamptz not null default now(),
+  updated_at      timestamptz,
+  sent_at         timestamptz,
+  sent_simulated  boolean not null default true,   -- there's no email service wired up; a "send" is simulated and recorded as such
+  unique (employee_id, reason, due_date)
+);
+comment on table public.compliance_reminders is 'Drafted by the compliance agent when it signs someone in and finds a lapsing training or policy acknowledgment. A person always reviews before anything is "sent".';
 
 create index on public.evidence (control_id, tested_at desc);
 create index on public.remediation (control_id) where status in ('open', 'in_progress', 'risk_accepted');

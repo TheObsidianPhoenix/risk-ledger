@@ -36,7 +36,7 @@ update public.profiles set role = 'control_owner', display_name = 'Marco' where 
 update public.controls set owner_id = '00000000-0000-0000-0000-0000000000b2', owner_name = 'Priya' where id = 'CC-04';
 update public.controls set owner_id = '00000000-0000-0000-0000-0000000000e5', owner_name = 'Marco' where id = 'CC-07';
 
-select t.check('setup: 12 active controls', (select count(*) = 12 from public.controls where status = 'active'));
+select t.check('setup: 13 active controls', (select count(*) = 13 from public.controls where status = 'active'));
 select t.check('setup: new sign-up gets no access', (select role = 'pending' from public.profiles where id = '00000000-0000-0000-0000-0000000000d4'));
 select t.check('setup: every table has RLS', not exists (select 1 from pg_class c join pg_namespace n on n.oid = c.relnamespace
                                                           where n.nspname = 'public' and c.relkind = 'r' and not c.relrowsecurity));
@@ -62,12 +62,13 @@ select public.run_control_tests();
 select t.check('run 1: expected passes', (select array_agg(id order by id) = '{CC-01,CC-03,CC-05,CC-08,SB-01,SB-02,SB-04}'
                                             from public.control_status where last_result = 'pass'),
                (select string_agg(id || '=' || last_result, ' ' order by id) from public.control_status));
-select t.check('run 1: expected failures', (select array_agg(id order by id) = '{CC-02,CC-04,CC-06,CC-07,SB-03}'
+select t.check('run 1: expected failures', (select array_agg(id order by id) = '{CC-02,CC-04,CC-06,CC-07,ENG-01,SB-03}'
                                               from public.control_status where last_result = 'fail'));
 select t.check('run 1: failing items are named', (select failing @> '["obsidian-marketing-assets"]' from public.evidence where control_id = 'CC-04'));
 select t.check('run 1: percentage reported', (select detail like '92%% (46 of 50)%' from public.evidence where control_id = 'CC-07'),
                (select detail from public.evidence where control_id = 'CC-07'));
-select t.check('run 1: one remediation item per failure', (select count(*) = 5 from public.remediation where status = 'open'));
+select t.check('run 1: open vulnerability finding flagged', (select failing @> '["VULN-2291"]' from public.evidence where control_id = 'ENG-01'));
+select t.check('run 1: one remediation item per failure', (select count(*) = 6 from public.remediation where status = 'open'));
 select t.check('run 1: critical failures due within 7 days', (select due_date = current_date + 7 from public.remediation where control_id = 'CC-04'));
 select t.check('run 1: risks with all controls passing are ready to close',
                (select array_agg(id order by id) = '{R-04,R-06,R-07}' from public.risks where status = 'ready_to_close'));
@@ -110,7 +111,7 @@ select t.check('second owner: update to Priya''s item had no effect', not exists
 
 -- ---------------- Auditor ----------------
 set role authenticated; select set_config('request.jwt.claim.sub', '00000000-0000-0000-0000-0000000000c3', false);
-select t.check('auditor: reads all remediation', (select count(*) = 5 from public.remediation));
+select t.check('auditor: reads all remediation', (select count(*) = 6 from public.remediation));
 select t.check('auditor: reads the audit log', (select count(*) > 20 from public.audit_log));
 select t.check('auditor: audit chain verifies', (select first_broken_id is null and rows_checked > 20 from public.verify_audit_chain()));
 update public.remediation set owner_note = 'auditor was here';   -- silently matches no rows under RLS
@@ -227,5 +228,43 @@ select t.check('live: SB-04 passes again once fixed', (select result = 'pass' fr
 create table public.forgot_rls (id int);
 select t.check('live: new table without RLS fails SB-01', (select result = 'fail' and failing @> '["forgot_rls"]' from public.live_check('rls_on_all_tables')));
 drop table public.forgot_rls;
+
+-- ---------------- Compliance agent: scans for lapsing training/policy acks, drafts reminders ----------------
+set role authenticated; select set_config('request.jwt.claim.sub', '00000000-0000-0000-0000-0000000000b2', false);   -- Priya, control owner
+select t.check('owner: can''t read the employee roster', (select count(*) = 0 from public.employees));
+select t.check('owner: can''t run the compliance scan', t.refused('select public.scan_compliance_lapses()'));
+reset role;
+
+set role authenticated; select set_config('request.jwt.claim.sub', '00000000-0000-0000-0000-0000000000a1', false);   -- Jasmine, grc_analyst
+select public.scan_compliance_lapses();
+select t.check('scan: drafts a reminder for each lapsing employee', (select count(*) = 3 from public.compliance_reminders));
+select t.check('scan: Morgan''s overdue training got a draft', (select count(*) = 1 from public.compliance_reminders r join public.employees e on e.id = r.employee_id
+                                                                   where e.name = 'Morgan Reyes' and r.reason = 'security_training' and r.status = 'drafted'));
+select t.check('scan: a draft names the manager', (select body like '%Dana Whitfield%' from public.compliance_reminders r join public.employees e on e.id = r.employee_id
+                                                      where e.name = 'Morgan Reyes'));
+select t.check('scan: re-running does not duplicate drafts', (select public.scan_compliance_lapses() = 0));
+select t.check('scan: the scan itself is logged', (select count(*) > 0 from public.activity_log where action = 'scan' and view = 'compliance_agent'));
+
+select public.edit_compliance_reminder((select id from public.compliance_reminders where status = 'drafted' limit 1), 'Edited subject', 'Edited body');
+select t.check('edit: reminder marked edited', (select count(*) = 1 from public.compliance_reminders where subject = 'Edited subject' and status = 'edited'));
+select t.check('edit: shows up in the audit log', (select count(*) > 0 from public.audit_log where table_name = 'compliance_reminders' and action = 'update'));
+
+select public.dismiss_compliance_reminder((select id from public.compliance_reminders where status = 'edited' limit 1));
+select t.check('dismiss: reminder marked dismissed', (select count(*) = 1 from public.compliance_reminders where status = 'dismissed'));
+select t.check('dismiss: a dismissed reminder can''t be sent', t.refused(format('select public.send_compliance_reminder(%s)', (select id from public.compliance_reminders where status = 'dismissed'))));
+
+select public.send_compliance_reminder((select id from public.compliance_reminders where status = 'drafted' limit 1));
+select t.check('send: reminder marked sent and labeled simulated', (select count(*) = 1 from public.compliance_reminders where status = 'sent' and sent_simulated and sent_at is not null));
+select t.check('send: a sent reminder can''t be edited again', t.refused(format('select public.edit_compliance_reminder(%s, ''x'', ''y'')', (select id from public.compliance_reminders where status = 'sent'))));
+reset role;
+
+set role authenticated; select set_config('request.jwt.claim.sub', '00000000-0000-0000-0000-0000000000c3', false);   -- auditor
+select t.check('auditor: reads the employee roster and the reminders', (select count(*) from public.employees) > 0 and (select count(*) from public.compliance_reminders) = 3);
+reset role;
+
+-- ---------------- Cross-team remediation routing ----------------
+select t.check('routing: a failed vuln-scan control routes to engineering', (select routes_to_team = 'engineering' from public.controls where id = 'ENG-01'));
+select t.check('routing: deprovisioning routes to hr', (select routes_to_team = 'hr' from public.controls where id = 'CC-02'));
+select t.check('routing: most controls route nowhere', (select count(*) = 12 from public.controls where routes_to_team is null));
 
 -- Results are in t.results; tests/run.sh prints them.

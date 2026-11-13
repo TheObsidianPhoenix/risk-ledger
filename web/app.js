@@ -117,7 +117,7 @@
     db.logActivity("sign_out");   // fired while the token is still valid; must come before the session is cleared
     try { await http("/auth/v1/logout", { method: "POST" }); } catch (_) { /* already gone */ }
     saveSession(null);
-    Object.assign(state, { user: null, profile: null, view: "dashboard", skippedMfa: false });
+    Object.assign(state, { user: null, profile: null, view: "dashboard", skippedMfa: false, complianceReminders: null });
     signInLogged = false;
     render();
   }
@@ -137,6 +137,14 @@
   ];
 
   let signInLogged = false;
+  state.complianceReminders = null;   // null = not scanned yet this session; [] = scanned, nothing pending
+  async function runComplianceScan() {
+    try {
+      await db.rpc("scan_compliance_lapses");
+      state.complianceReminders = await db.select("compliance_reminders",
+        "select=*,employees(name,email,manager_name,manager_email,department)&status=in.(drafted,edited)&order=due_date");
+    } catch (_) { state.complianceReminders = []; }   // not this role, or the agent isn't deployed yet: just skip it
+  }
   async function render() {
     app.replaceChildren();
     if (!state.session) { state.session = loadSession(); }
@@ -154,7 +162,11 @@
     const rows = await db.select("profiles", "select=id,display_name,role&id=eq." + state.user.id);
     state.profile = rows[0] || { role: "pending", display_name: state.user.email };
     if (state.profile.role === "pending") return app.append(pendingView());
-    if (!signInLogged) { signInLogged = true; db.logActivity("sign_in"); db.logActivity("view", state.view); }
+    if (!signInLogged) {
+      signInLogged = true;
+      db.logActivity("sign_in"); db.logActivity("view", state.view);
+      if (can.audit()) await runComplianceScan();   // the compliance agent greets grc_analyst/auditor at sign-in
+    }
     app.append(await shell());
   }
   function go(view) { state.view = view; db.logActivity("view", view); render(); }
@@ -428,6 +440,7 @@
 
     return h("div", {},
       head("Control health", "Every result below comes from a test, not a screenshot. Failures open remediation work; risks close only when evidence passes.", runButton()),
+      compliancePanel(),
       h("div", { class: "grid tiles" },
         tile("Controls passing", `${passing}/${active.length}`, lastRun ? "Last run " + ago(lastRun.started_at) : "Not run yet"),
         tile("Open remediation", remediation.length, overdueItems.length ? overdueItems.length + " overdue" : "None overdue"),
@@ -474,6 +487,105 @@
         : h("div", { class: "empty small" }, "Nothing in this lane"));
   }
   const tile = (label, value, sub) => h("div", { class: "card tile" }, h("div", { class: "label" }, label), h("div", { class: "value" }, value), h("div", { class: "sub" }, sub));
+
+  // ---------------------------------------------------------------- compliance agent
+  const COMPLIANCE_REASON = { security_training: "Security training", policy_ack: "Policy acknowledgment" };
+  async function refreshComplianceReminders() {
+    state.complianceReminders = await db.select("compliance_reminders",
+      "select=*,employees(name,email,manager_name,manager_email,department)&status=in.(drafted,edited)&order=due_date").catch(() => []);
+  }
+  function compliancePanel() {
+    const reminders = state.complianceReminders;
+    if (reminders === null) return null;   // this role isn't scanned, or the agent isn't deployed yet
+    return h("section", { class: "card gap-bottom" },
+      h("div", { class: "card-head" }, h("div", {},
+        h("h2", {}, "Compliance agent"),
+        h("p", {}, "Scanned the training and policy-acknowledgment roster when you signed in. A person reviews every draft; sending is simulated here, since no email service is connected, and is recorded either way."))),
+      h("div", { class: "card-body" },
+        reminders.length ? h("div", { class: "compliance-items" }, reminders.map(complianceReminderRow))
+          : h("div", { class: "empty" }, "Nothing lapsing in the next 30 days.")));
+  }
+  function complianceReminderRow(r) {
+    const emp = r.employees || {};
+    return h("div", { class: "compliance-item" },
+      h("div", {},
+        h("div", { class: "cell-title" }, (emp.name || "—") + " · " + (COMPLIANCE_REASON[r.reason] || r.reason)),
+        h("div", { class: "cell-sub" }, "Due " + fmtDate(r.due_date) + " · copies " + (emp.manager_name || "—"),
+          r.status === "edited" ? h("span", { class: "badge warn gap-left" }, "Edited") : null),
+        h("div", { class: "cell-sub faint" }, "“" + r.subject + "”")),
+      h("div", { class: "actions" },
+        h("button", { class: "btn small", onclick: () => complianceReminderDrawer(r) }, "Review / edit"),
+        h("button", { class: "btn small primary", onclick: () => sendComplianceReminderAsIs(r) }, "Send now (simulated)"),
+        h("button", { class: "btn small", onclick: () => dismissComplianceReminder(r) }, "Dismiss")));
+  }
+  async function sendComplianceReminderAsIs(r) {
+    try { await db.rpc("send_compliance_reminder", { p_id: r.id }); toast("Sent (simulated) — recorded in the audit log."); await refreshComplianceReminders(); render(); }
+    catch (x) { toast(x.message, true); }
+  }
+  async function dismissComplianceReminder(r) {
+    try { await db.rpc("dismiss_compliance_reminder", { p_id: r.id }); toast("Dismissed."); await refreshComplianceReminders(); render(); }
+    catch (x) { toast(x.message, true); }
+  }
+  function complianceReminderDrawer(r) {
+    const emp = r.employees || {};
+    const err = h("div", { class: "error", hidden: true });
+    const subject = h("input", { type: "text", id: "csubject", value: r.subject });
+    const body = h("textarea", { id: "cbody", rows: 7 }, r.body);
+    const save = async (thenSend) => {
+      try {
+        await db.rpc("edit_compliance_reminder", { p_id: r.id, p_subject: subject.value.trim(), p_body: body.value.trim() });
+        if (thenSend) await db.rpc("send_compliance_reminder", { p_id: r.id });
+        closeDrawer(); toast(thenSend ? "Sent (simulated) — recorded in the audit log." : "Edits saved."); await refreshComplianceReminders(); render();
+      } catch (x) { err.hidden = false; err.textContent = x.message; }
+    };
+    drawer(h("div", {},
+      h("div", { class: "drawer-head" }, h("div", {}, h("div", { class: "faint mono" }, COMPLIANCE_REASON[r.reason]), h("h1", {}, emp.name || "Reminder")), null),
+      h("p", { class: "muted gap-bottom" }, "Due " + fmtDate(r.due_date) + " · " + (emp.email || "") + " · manager " + (emp.manager_name || "—") + " (" + (emp.manager_email || "") + ")"),
+      h("div", { class: "notice" }, "Drafted by the compliance agent, not sent. There's no email service connected in this demo, so “send” is simulated and recorded as such."),
+      err,
+      h("div", { class: "field" }, h("label", { for: "csubject" }, "Subject"), subject),
+      h("div", { class: "field" }, h("label", { for: "cbody" }, "Body"), body),
+      h("div", { class: "actions" },
+        h("button", { class: "btn", type: "button", onclick: () => save(false) }, "Save edits"),
+        h("button", { class: "btn primary", type: "button", onclick: () => save(true) }, "Save & send now (simulated)"),
+        h("button", { class: "btn", type: "button", onclick: () => { closeDrawer(); dismissComplianceReminder(r); } }, "Dismiss"),
+        h("button", { class: "btn", type: "button", onclick: closeDrawer }, "Cancel"))));
+  }
+
+  // ----------------------------------------------- cross-team remediation (labeled demo)
+  const TEAM_LABEL = { engineering: "Engineering", hr: "HR / People Ops" };
+  function draftCrossTeamMessage(m) {
+    const team = m.controls && m.controls.routes_to_team;
+    if (!team) return null;
+    const reason = team === "engineering"
+      ? "remediation needs a code or infrastructure change outside GRC's own control"
+      : "remediation needs an access/employment step that HR or People Ops has to confirm";
+    return {
+      to: TEAM_LABEL[team],
+      subject: `[Security] ${m.control_id} needs ${TEAM_LABEL[team]}: ${m.failure_reason}`,
+      body: `Opening this with ${TEAM_LABEL[team]} because ${reason}.\n\n`
+        + `Control: ${m.control_id}\nSeverity: ${m.severity}\nFailure: ${m.failure_reason}\nDue: ${fmtDate(m.due_date)}\n\n`
+        + `Idea: this would normally open a ticket automatically (e.g. in Jira or the HR system) the moment the control fails. `
+        + `This is a demo of that idea — nothing is actually sent or filed.`,
+    };
+  }
+  function crossTeamDrawer(m) {
+    const msg = draftCrossTeamMessage(m);
+    if (!msg) return;
+    drawer(h("div", {},
+      h("div", { class: "drawer-head" }, h("div", {}, h("div", { class: "faint mono" }, m.control_id), h("h1", {}, "Cross-team request")), h("span", { class: "badge plain" }, "Demo")),
+      h("div", { class: "notice" }, "This is a demo of what could be automated for cross-team remediation — no message is actually sent. “Simulate send” only logs that this idea was shown, in the activity trail."),
+      h("dl", { class: "kv" }, h("dt", {}, "To"), h("dd", {}, msg.to), h("dt", {}, "Subject"), h("dd", {}, msg.subject)),
+      h("pre", {}, msg.body),
+      h("div", { class: "actions" },
+        h("button", {
+          class: "btn primary", onclick: () => {
+            db.logActivity("view_detail", "remediation", `Demo cross-team request: ${m.control_id} → ${msg.to}`);
+            closeDrawer(); toast("Simulated — logged as a demo idea, nothing was actually sent.");
+          },
+        }, "Simulate send"),
+        h("button", { class: "btn", type: "button", onclick: closeDrawer }, "Close"))));
+  }
 
   // ---------------------------------------------------------------- controls
   async function controlsView(status) {
@@ -570,7 +682,7 @@
 
   // ---------------------------------------------------------------- remediation
   async function remediationView() {
-    const rows = await db.select("remediation", "select=*&order=status,due_date");
+    const rows = await db.select("remediation", "select=*,controls(routes_to_team)&order=status,due_date");
     const role = state.profile.role;
     const columns = [
       { key: "control", label: "Control", value: (m) => m.control_id },
@@ -583,12 +695,14 @@
     ];
     const renderRow = (m) => {
       const overdue = ["open", "in_progress"].includes(m.status) && new Date(m.due_date) < new Date(new Date().toDateString());
+      const team = m.controls && m.controls.routes_to_team;
       return h("tr", {},
         h("td", { class: "nowrap cell-title" }, m.control_id), h("td", {}, m.failure_reason, m.owner_note ? h("div", { class: "cell-sub" }, "Note: " + m.owner_note) : null),
         h("td", {}, m.severity), h("td", { class: "nowrap" }, m.owner_name || "—"),
         h("td", { class: "nowrap" + (overdue ? "" : " muted") }, overdue ? h("span", { class: "badge fail" }, "Overdue " + fmtDate(m.due_date)) : fmtDate(m.due_date)),
         h("td", {}, statusBadge(m.status), m.status === "risk_accepted" ? h("div", { class: "cell-sub" }, "Until " + fmtDate(m.accepted_until)) : null),
-        h("td", { class: "nowrap" }, remediationActions(m)));
+        h("td", { class: "nowrap" }, remediationActions(m),
+          team ? h("button", { class: "btn small gap-left", onclick: () => crossTeamDrawer(m) }, "Needs: " + TEAM_LABEL[team] + " (demo)") : null));
     };
     return h("div", {},
       head("Remediation", role === "control_owner" ? "Work assigned to you. Update progress here; the item closes itself when the next test run passes."
