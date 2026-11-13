@@ -74,6 +74,8 @@ function serve() {
       const fn = p.slice("/rest/v1/rpc/".length);
       if (fn === "run_control_tests") return json(3);
       if (fn === "verify_audit_chain") return json(fixture("verify_audit_chain"));
+      if (fn === "verify_activity_chain") return json(fixture("verify_activity_chain"));
+      if (fn === "log_activity") return json(null);
       if (fn === "close_risk") {
         const r = risks.find((x) => x.id === body.p_id);
         Object.assign(r, { status: "closed", close_note: body.p_note, closed_at: new Date().toISOString() });
@@ -145,6 +147,10 @@ function serve() {
   await step("audit history verifies the chain", async () => {
     await page.click("nav >> text=Audit history"); await page.click("text=Verify the hash chain"); await see("Intact: 64 rows verified");
     if (await page.evaluate(() => document.documentElement.scrollWidth > window.innerWidth + 1)) throw new Error("audit page scrolls sideways");
+  });
+  await step("activity log verifies the chain", async () => {
+    await page.click("nav >> text=Activity log"); await see("Signed in"); await see("dashboard");
+    await page.click("text=Verify the hash chain"); await see("Intact: 6 rows verified");
   });
   await step("dark mode", async () => {
     await page.click("text=Dark mode"); await page.waitForFunction(() => document.documentElement.dataset.theme !== "light");

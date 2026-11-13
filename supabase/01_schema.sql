@@ -149,6 +149,23 @@ create table public.audit_log (
 );
 comment on table public.audit_log is 'Every change to the ledger. Triggers block updates, deletes and truncation; each row carries a hash of the one before it.';
 
+-- ---------------------------------------------------------------------------
+-- Activity log: a separate hash-chained trail of sign-ins and page views, so
+-- someone just clicking around doesn't drown the audit log's real data changes
+-- ---------------------------------------------------------------------------
+create table public.activity_log (
+  id         bigint generated always as identity primary key,
+  at         timestamptz not null default clock_timestamp(),
+  actor      uuid not null references auth.users(id),
+  actor_role text not null,
+  action     text not null check (action in ('sign_in', 'sign_out', 'view', 'view_detail')),
+  view       text check (char_length(view) <= 40),
+  detail     text check (char_length(detail) <= 200),
+  prev_hash  text not null,
+  hash       text not null
+);
+comment on table public.activity_log is 'Every sign-in, sign-out, page view and record opened, written by the browser itself. Append-only and hash-chained like audit_log, but kept in its own table and its own chain so session activity never dilutes the record of actual data changes.';
+
 create index on public.evidence (control_id, tested_at desc);
 create index on public.remediation (control_id) where status in ('open', 'in_progress', 'risk_accepted');
 create index on public.source_snapshots (system_id, collected_at desc);

@@ -1,0 +1,8 @@
+[
+  {"id": 1, "at": "2026-11-05T22:10:01.000000-08:00", "actor": "00000000-0000-0000-0000-0000000000a1", "actor_role": "grc_analyst", "action": "sign_in", "view": null, "detail": null},
+  {"id": 2, "at": "2026-11-05T22:10:01.500000-08:00", "actor": "00000000-0000-0000-0000-0000000000a1", "actor_role": "grc_analyst", "action": "view", "view": "dashboard", "detail": null},
+  {"id": 3, "at": "2026-11-05T22:10:05.000000-08:00", "actor": "00000000-0000-0000-0000-0000000000a1", "actor_role": "grc_analyst", "action": "view", "view": "controls", "detail": null},
+  {"id": 4, "at": "2026-11-05T22:10:08.000000-08:00", "actor": "00000000-0000-0000-0000-0000000000a1", "actor_role": "grc_analyst", "action": "view_detail", "view": "controls", "detail": "SB-03"},
+  {"id": 5, "at": "2026-11-05T22:10:20.000000-08:00", "actor": "00000000-0000-0000-0000-0000000000a1", "actor_role": "grc_analyst", "action": "view", "view": "evidence", "detail": null},
+  {"id": 6, "at": "2026-11-05T22:10:40.000000-08:00", "actor": "00000000-0000-0000-0000-0000000000a1", "actor_role": "grc_analyst", "action": "sign_out", "view": null, "detail": null}
+]

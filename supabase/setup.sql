@@ -154,6 +154,23 @@ create table public.audit_log (
 );
 comment on table public.audit_log is 'Every change to the ledger. Triggers block updates, deletes and truncation; each row carries a hash of the one before it.';
 
+-- ---------------------------------------------------------------------------
+-- Activity log: a separate hash-chained trail of sign-ins and page views, so
+-- someone just clicking around doesn't drown the audit log's real data changes
+-- ---------------------------------------------------------------------------
+create table public.activity_log (
+  id         bigint generated always as identity primary key,
+  at         timestamptz not null default clock_timestamp(),
+  actor      uuid not null references auth.users(id),
+  actor_role text not null,
+  action     text not null check (action in ('sign_in', 'sign_out', 'view', 'view_detail')),
+  view       text check (char_length(view) <= 40),
+  detail     text check (char_length(detail) <= 200),
+  prev_hash  text not null,
+  hash       text not null
+);
+comment on table public.activity_log is 'Every sign-in, sign-out, page view and record opened, written by the browser itself. Append-only and hash-chained like audit_log, but kept in its own table and its own chain so session activity never dilutes the record of actual data changes.';
+
 create index on public.evidence (control_id, tested_at desc);
 create index on public.remediation (control_id) where status in ('open', 'in_progress', 'risk_accepted');
 create index on public.source_snapshots (system_id, collected_at desc);
@@ -573,6 +590,37 @@ begin
   end loop;
 end $$;
 
+-- Writes one row to the activity log: a sign-in, sign-out, page view or a record
+-- opened. The only way the browser can write here; there is no insert grant on
+-- the table itself, so a signed-in user can log their own activity and nothing else.
+create function public.log_activity(p_action text, p_view text default null, p_detail text default null) returns void
+language plpgsql volatile security definer set search_path = public as $$
+begin
+  if auth.uid() is null then return; end if;
+  insert into public.activity_log (actor, actor_role, action, view, detail)
+  values (auth.uid(), public.my_role()::text, p_action, p_view, p_detail);
+end $$;
+
+-- Anyone allowed to read the activity log can check that nobody has altered it
+create function public.verify_activity_chain(out rows_checked bigint, out first_broken_id bigint)
+language plpgsql stable security definer set search_path = public as $$
+declare a record; expected text := 'genesis';
+begin
+  perform public.require_role(array['grc_analyst', 'auditor']::public.app_role[]);
+  rows_checked := 0;
+  for a in select * from public.activity_log order by id loop
+    rows_checked := rows_checked + 1;
+    if a.prev_hash <> expected
+       or a.hash <> encode(sha256(convert_to(a.prev_hash || '|' || a.id || '|' || extract(epoch from a.at) || '|'
+                                             || a.actor::text || '|' || a.action || '|' || coalesce(a.view, '')
+                                             || '|' || coalesce(a.detail, ''), 'UTF8')), 'hex') then
+      first_broken_id := a.id;
+      return;
+    end if;
+    expected := a.hash;
+  end loop;
+end $$;
+
 -- ===== supabase/03_security.sql =====
 -- Risk Ledger, part 3 of 4: security.
 -- Row Level Security on every table, least-privilege grants, guard triggers that
@@ -649,6 +697,35 @@ begin
           lower(tg_op), tg_table_name, rec ->> 'id', diff);
   return coalesce(new, old);
 end $$;
+
+-- ---------------------------------------------------------------------------
+-- Activity log: its own hash chain, independent of audit_log's, written only
+-- through log_activity() below (never a direct insert from the client)
+-- ---------------------------------------------------------------------------
+create function public.activity_chain() returns trigger
+language plpgsql security definer set search_path = public as $$
+begin
+  perform pg_advisory_xact_lock(424243);   -- a different lock number: its own chain, its own writer lock
+  new.prev_hash := coalesce((select hash from public.activity_log order by id desc limit 1), 'genesis');
+  new.hash := encode(sha256(convert_to(new.prev_hash || '|' || new.id || '|' || extract(epoch from new.at) || '|'
+                                       || new.actor::text || '|' || new.action || '|' || coalesce(new.view, '')
+                                       || '|' || coalesce(new.detail, ''), 'UTF8')), 'hex');
+  return new;
+end $$;
+
+create trigger activity_log_chain before insert on public.activity_log
+  for each row execute function public.activity_chain();
+
+create function public.activity_log_block() returns trigger
+language plpgsql set search_path = public as $$
+begin
+  raise exception 'The activity log is append-only: % is not allowed', tg_op using errcode = '42501';
+end $$;
+
+create trigger activity_log_no_change before update or delete on public.activity_log
+  for each row execute function public.activity_log_block();
+create trigger activity_log_no_truncate before truncate on public.activity_log
+  for each statement execute function public.activity_log_block();
 
 create trigger audit_risks after insert or update or delete on public.risks for each row execute function public.audit();
 create trigger audit_controls after insert or update or delete on public.controls for each row execute function public.audit();
@@ -770,6 +847,7 @@ alter table public.test_runs enable row level security;
 alter table public.evidence enable row level security;
 alter table public.remediation enable row level security;
 alter table public.audit_log enable row level security;
+alter table public.activity_log enable row level security;
 
 create policy "see yourself; GRC and auditors see everyone" on public.profiles for select to authenticated
   using (id = auth.uid() or public.my_role() in ('grc_analyst', 'auditor'));
@@ -797,6 +875,9 @@ create policy "GRC updates remediation; owners update their own" on public.remed
 create policy "GRC and auditors read the audit log" on public.audit_log for select to authenticated
   using (public.my_role() in ('grc_analyst', 'auditor'));
 
+create policy "GRC and auditors read the activity log" on public.activity_log for select to authenticated
+  using (public.my_role() in ('grc_analyst', 'auditor'));
+
 -- ---------------------------------------------------------------------------
 -- Grants: nothing for anonymous visitors; read-only for signed-in users, except
 -- the few columns people may change. Every other change goes through a function.
@@ -811,7 +892,8 @@ revoke execute on all functions in schema public from public, anon, authenticate
 grant execute on function public.my_role(), public.run_control_tests(), public.approve_control(text),
   public.close_risk(text, text), public.load_mock_snapshot(text, jsonb), public.verify_audit_chain(),
   public.validate_rule(jsonb, text),
-  public.propose_control(text, text, text, text, jsonb, text, text, text, int, text[], text[], text)
+  public.propose_control(text, text, text, text, jsonb, text, text, text, int, text[], text[], text),
+  public.log_activity(text, text, text), public.verify_activity_chain()
   to authenticated;
 
 -- Keep future objects closed by default, too

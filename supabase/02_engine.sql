@@ -411,3 +411,34 @@ begin
     expected := a.hash;
   end loop;
 end $$;
+
+-- Writes one row to the activity log: a sign-in, sign-out, page view or a record
+-- opened. The only way the browser can write here; there is no insert grant on
+-- the table itself, so a signed-in user can log their own activity and nothing else.
+create function public.log_activity(p_action text, p_view text default null, p_detail text default null) returns void
+language plpgsql volatile security definer set search_path = public as $$
+begin
+  if auth.uid() is null then return; end if;
+  insert into public.activity_log (actor, actor_role, action, view, detail)
+  values (auth.uid(), public.my_role()::text, p_action, p_view, p_detail);
+end $$;
+
+-- Anyone allowed to read the activity log can check that nobody has altered it
+create function public.verify_activity_chain(out rows_checked bigint, out first_broken_id bigint)
+language plpgsql stable security definer set search_path = public as $$
+declare a record; expected text := 'genesis';
+begin
+  perform public.require_role(array['grc_analyst', 'auditor']::public.app_role[]);
+  rows_checked := 0;
+  for a in select * from public.activity_log order by id loop
+    rows_checked := rows_checked + 1;
+    if a.prev_hash <> expected
+       or a.hash <> encode(sha256(convert_to(a.prev_hash || '|' || a.id || '|' || extract(epoch from a.at) || '|'
+                                             || a.actor::text || '|' || a.action || '|' || coalesce(a.view, '')
+                                             || '|' || coalesce(a.detail, ''), 'UTF8')), 'hex') then
+      first_broken_id := a.id;
+      return;
+    end if;
+    expected := a.hash;
+  end loop;
+end $$;
