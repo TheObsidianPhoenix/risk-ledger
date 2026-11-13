@@ -503,6 +503,16 @@
 
   // ---------------------------------------------------------------- compliance agent
   const COMPLIANCE_REASON = { security_training: "Security training", policy_ack: "Policy acknowledgment" };
+  // Severity relative to today, not just "within 30 days" — overdue, due within the week, or further out.
+  function complianceUrgency(dueDate) {
+    const today = new Date(new Date().toISOString().slice(0, 10) + "T00:00:00Z");
+    const due = new Date(dueDate + "T00:00:00Z");
+    const days = Math.round((due - today) / 86400000);
+    if (days < 0) return { days, tier: "overdue", cls: "fail", label: "Overdue by " + (-days) + " day" + (-days === 1 ? "" : "s") };
+    if (days === 0) return { days, tier: "critical", cls: "warn", label: "Due today" };
+    if (days <= 14) return { days, tier: "critical", cls: "warn", label: "Due in " + days + " day" + (days === 1 ? "" : "s") };
+    return { days, tier: "upcoming", cls: "info", label: "Due in " + days + " days" };
+  }
   let corvusExpanded = false;
   let corvusGreeted = false;
   async function refreshComplianceReminders() {
@@ -529,9 +539,19 @@
     const reminders = state.complianceReminders || [];
     const count = reminders.length;
     const first = ((state.profile && state.profile.display_name) || "there").split(" ")[0];
+    const overdue = reminders.filter((r) => complianceUrgency(r.due_date).tier === "overdue").length;
+    const critical = reminders.filter((r) => complianceUrgency(r.due_date).tier === "critical").length;
+    const upcoming = count - overdue - critical;
+    const clauses = [];
+    if (overdue) clauses.push(`${overdue} ${overdue === 1 ? "is" : "are"} already overdue`);
+    if (critical) clauses.push(`${critical} ${critical === 1 ? "is" : "are"} due within two weeks`);
+    if (upcoming) clauses.push(`${upcoming} ${upcoming === 1 ? "is" : "are"} coming due in the next 30 days`);
+    const breakdown = clauses.length > 1
+      ? clauses.slice(0, -1).join(", ") + ", and " + clauses[clauses.length - 1]
+      : (clauses[0] || "");
     const greeting = count
       ? `Hey ${first} — while you were signing in, I checked the training and policy-acknowledgment roster. `
-        + `${count} ${count === 1 ? "person's" : "people's"} compliance is lapsing in the next 30 days.`
+        + `${count} ${count === 1 ? "person's" : "people's"} compliance needs attention: ${breakdown}.`
       : `Hey ${first} — I checked the training and policy-acknowledgment roster while you were signing in. Everyone's current. Nothing for you here.`;
     const badge = h("button", {
       class: "corvus-badge" + (count ? " urgent" : ""), "aria-label": "Open Corvus",
@@ -557,10 +577,12 @@
   }
   function complianceReminderRow(r) {
     const emp = r.employees || {};
+    const u = complianceUrgency(r.due_date);
     return h("div", { class: "compliance-item" },
       h("div", {},
         h("div", { class: "cell-title" }, (emp.name || "—") + " · " + (COMPLIANCE_REASON[r.reason] || r.reason)),
         h("div", { class: "cell-sub" }, "Due " + fmtDate(r.due_date) + " · copies " + (emp.manager_name || "—"),
+          h("span", { class: "badge " + u.cls + " gap-left" }, u.label),
           r.status === "edited" ? h("span", { class: "badge warn gap-left" }, "Edited") : null),
         h("div", { class: "cell-sub faint" }, "“" + r.subject + "”")),
       h("div", { class: "actions" },
