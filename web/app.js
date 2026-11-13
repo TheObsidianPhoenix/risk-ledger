@@ -119,6 +119,7 @@
     saveSession(null);
     Object.assign(state, { user: null, profile: null, view: "dashboard", skippedMfa: false, complianceReminders: null });
     signInLogged = false;
+    complianceModalShown = false;
     render();
   }
   const verifiedFactors = () => ((state.user && state.user.factors) || []).filter((f) => f.status === "verified" && f.factor_type === "totp");
@@ -168,6 +169,10 @@
       if (can.audit()) await runComplianceScan();   // the compliance agent greets grc_analyst/auditor at sign-in
     }
     app.append(await shell());
+    if (can.audit() && !complianceModalShown && state.complianceReminders && state.complianceReminders.length) {
+      complianceModalShown = true;
+      complianceAgentModal();   // pops up over whatever page loads first, not a dashboard card
+    }
   }
   function go(view) { state.view = view; db.logActivity("view", view); render(); }
 
@@ -308,6 +313,9 @@
         h("div", {}, h("div", { class: "user-name" }, state.profile.display_name), ROLE_NAMES[state.profile.role],
           claims().aal === "aal2" ? h("span", { class: "badge pass gap-left" }, "MFA") : h("span", { class: "badge warn gap-left" }, "No MFA")),
         h("div", { class: "actions" },
+          can.audit() && state.complianceReminders && state.complianceReminders.length
+            ? h("button", { class: "btn small", onclick: () => complianceAgentModal() }, "Compliance agent (" + state.complianceReminders.length + ")")
+            : null,
           h("button", { class: "btn small", onclick: toggleTheme }, document.documentElement.dataset.theme === "light" ? "Dark mode" : "Light mode"),
           h("button", { class: "btn small", onclick: signOut }, "Sign out"))));
     const main = h("main", { class: "main" });
@@ -440,7 +448,6 @@
 
     return h("div", {},
       head("Control health", "Every result below comes from a test, not a screenshot. Failures open remediation work; risks close only when evidence passes.", runButton()),
-      compliancePanel(),
       h("div", { class: "grid tiles" },
         tile("Controls passing", `${passing}/${active.length}`, lastRun ? "Last run " + ago(lastRun.started_at) : "Not run yet"),
         tile("Open remediation", remediation.length, overdueItems.length ? overdueItems.length + " overdue" : "None overdue"),
@@ -490,20 +497,40 @@
 
   // ---------------------------------------------------------------- compliance agent
   const COMPLIANCE_REASON = { security_training: "Security training", policy_ack: "Policy acknowledgment" };
+  let complianceModalShown = false;
   async function refreshComplianceReminders() {
     state.complianceReminders = await db.select("compliance_reminders",
       "select=*,employees(name,email,manager_name,manager_email,department)&status=in.(drafted,edited)&order=due_date").catch(() => []);
   }
-  function compliancePanel() {
-    const reminders = state.complianceReminders;
-    if (reminders === null) return null;   // this role isn't scanned, or the agent isn't deployed yet
-    return h("section", { class: "card gap-bottom" },
-      h("div", { class: "card-head" }, h("div", {},
-        h("h2", {}, "Compliance agent"),
-        h("p", {}, "Scanned the training and policy-acknowledgment roster when you signed in. A person reviews every draft; sending is simulated here, since no email service is connected, and is recorded either way."))),
-      h("div", { class: "card-body" },
-        reminders.length ? h("div", { class: "compliance-items" }, reminders.map(complianceReminderRow))
-          : h("div", { class: "empty" }, "Nothing lapsing in the next 30 days.")));
+  function typeInto(el, text, speed, onDone) {
+    let i = 0;
+    el.textContent = "";
+    el.classList.add("typing");
+    const id = setInterval(() => {
+      i++;
+      el.textContent = text.slice(0, i);
+      if (i >= text.length) { clearInterval(id); el.classList.remove("typing"); if (onDone) onDone(); }
+    }, speed);
+  }
+  function complianceAgentModal() {
+    const reminders = state.complianceReminders || [];
+    const first = ((state.profile && state.profile.display_name) || "there").split(" ")[0];
+    const greeting = reminders.length
+      ? `Hey ${first} — while you were signing in, I checked the training and policy-acknowledgment roster. `
+        + `${reminders.length} ${reminders.length === 1 ? "person's" : "people's"} compliance is lapsing in the next 30 days.`
+      : `Hey ${first} — I checked the training and policy-acknowledgment roster while you were signing in. Everyone's current. Nothing for you here.`;
+    const greetEl = h("p", { class: "agent-line" });
+    const body = h("div", { class: "modal-body reveal-pending" },
+      h("div", { class: "notice" }, "A person reviews every draft. Sending is simulated here, since no email service is connected, and is recorded either way."),
+      reminders.length ? h("div", { class: "compliance-items" }, reminders.map(complianceReminderRow))
+        : h("div", { class: "empty" }, "All clear — nothing to review."));
+    modal(h("div", {},
+      h("div", { class: "modal-head" },
+        h("div", { class: "agent-badge" }, h("span", { class: "agent-badge-ring" }), "AI"),
+        h("div", { class: "modal-head-text" }, h("h1", {}, "Compliance agent"), greetEl),
+        h("button", { class: "btn small", onclick: closeDrawer, "aria-label": "Close" }, "Close")),
+      body));
+    typeInto(greetEl, greeting, 15, () => { body.classList.remove("reveal-pending"); body.classList.add("reveal"); });
   }
   function complianceReminderRow(r) {
     const emp = r.employees || {};
@@ -519,11 +546,11 @@
         h("button", { class: "btn small", onclick: () => dismissComplianceReminder(r) }, "Dismiss")));
   }
   async function sendComplianceReminderAsIs(r) {
-    try { await db.rpc("send_compliance_reminder", { p_id: r.id }); toast("Sent (simulated) — recorded in the audit log."); await refreshComplianceReminders(); render(); }
+    try { await db.rpc("send_compliance_reminder", { p_id: r.id }); toast("Sent (simulated) — recorded in the audit log."); await refreshComplianceReminders(); complianceAgentModal(); render(); }
     catch (x) { toast(x.message, true); }
   }
   async function dismissComplianceReminder(r) {
-    try { await db.rpc("dismiss_compliance_reminder", { p_id: r.id }); toast("Dismissed."); await refreshComplianceReminders(); render(); }
+    try { await db.rpc("dismiss_compliance_reminder", { p_id: r.id }); toast("Dismissed."); await refreshComplianceReminders(); complianceAgentModal(); render(); }
     catch (x) { toast(x.message, true); }
   }
   function complianceReminderDrawer(r) {
@@ -535,7 +562,9 @@
       try {
         await db.rpc("edit_compliance_reminder", { p_id: r.id, p_subject: subject.value.trim(), p_body: body.value.trim() });
         if (thenSend) await db.rpc("send_compliance_reminder", { p_id: r.id });
-        closeDrawer(); toast(thenSend ? "Sent (simulated) — recorded in the audit log." : "Edits saved."); await refreshComplianceReminders(); render();
+        await refreshComplianceReminders();
+        toast(thenSend ? "Sent (simulated) — recorded in the audit log." : "Edits saved.");
+        complianceAgentModal(); render();
       } catch (x) { err.hidden = false; err.textContent = x.message; }
     };
     drawer(h("div", {},
@@ -548,8 +577,8 @@
       h("div", { class: "actions" },
         h("button", { class: "btn", type: "button", onclick: () => save(false) }, "Save edits"),
         h("button", { class: "btn primary", type: "button", onclick: () => save(true) }, "Save & send now (simulated)"),
-        h("button", { class: "btn", type: "button", onclick: () => { closeDrawer(); dismissComplianceReminder(r); } }, "Dismiss"),
-        h("button", { class: "btn", type: "button", onclick: closeDrawer }, "Cancel"))));
+        h("button", { class: "btn", type: "button", onclick: () => dismissComplianceReminder(r) }, "Dismiss"),
+        h("button", { class: "btn", type: "button", onclick: () => complianceAgentModal() }, "Back"))));
   }
 
   // ----------------------------------------------- cross-team remediation (labeled demo)
@@ -901,6 +930,12 @@
     document.body.append(back);
   }
   function closeDrawer() { const d = document.getElementById("drawer"); if (d) d.remove(); }
+  function modal(content) {
+    closeDrawer();
+    const back = h("div", { class: "backdrop modal-backdrop", id: "drawer", onclick: (e) => { if (e.target === back) closeDrawer(); } },
+      h("div", { class: "modal-card", role: "dialog", "aria-modal": "true" }, content));
+    document.body.append(back);
+  }
   document.addEventListener("keydown", (e) => { if (e.key === "Escape") closeDrawer(); });
 
   // Light (the pastel phoenix) is the default; dark is an option a viewer can switch to

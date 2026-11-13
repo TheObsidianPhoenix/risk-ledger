@@ -156,7 +156,8 @@ function serve() {
   });
   await step("compliance agent: dismiss the remaining draft", async () => {
     await page.locator(".compliance-item", { hasText: "Morgan Reyes" }).getByText("Dismiss").click();
-    await see("Nothing lapsing in the next 30 days.");
+    await see("All clear");
+    await page.getByRole("button", { name: "Close" }).click();
   });
   await step("run tests", async () => { await page.click("text=Run tests now"); await see("Test run complete"); });
   await step("controls table", async () => { await page.click("nav >> text=Controls"); await see("SB-04"); await see("SOC 2"); });

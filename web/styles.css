@@ -180,6 +180,25 @@ tbody tr.clickable:hover { background: var(--neutral-bg); }
 .backdrop { position: fixed; inset: 0; background: rgba(0, 0, 0, 0.5); display: flex; justify-content: flex-end; z-index: 10; }
 .drawer { width: min(640px, 100%); height: 100%; overflow-y: auto; background: var(--bg-raised); border-left: 1px solid var(--border); padding: 24px; }
 .drawer-head { display: flex; justify-content: space-between; align-items: flex-start; gap: 16px; margin-bottom: 18px; }
+
+.modal-backdrop { justify-content: center; align-items: center; padding: 24px; }
+.modal-card { width: min(640px, 100%); max-height: 86vh; overflow-y: auto; background: var(--bg-raised); border: 1px solid var(--border);
+  border-radius: var(--radius, 12px); padding: 26px; box-shadow: 0 24px 70px rgba(0, 0, 0, 0.4); animation: modal-in 0.22s ease-out; }
+@keyframes modal-in { from { opacity: 0; transform: translateY(10px) scale(0.98); } to { opacity: 1; transform: none; } }
+.modal-head { display: flex; align-items: flex-start; gap: 14px; margin-bottom: 16px; }
+.modal-head-text { flex: 1; min-width: 0; }
+.modal-head-text h1 { font-size: 16px; margin: 0 0 4px; }
+.agent-line { min-height: 1.4em; }
+.agent-line.typing::after { content: "\258c"; display: inline-block; margin-left: 2px; animation: blink 0.85s steps(1) infinite; color: var(--accent); }
+@keyframes blink { 50% { opacity: 0; } }
+.agent-badge { position: relative; flex-shrink: 0; width: 34px; height: 34px; border-radius: 50%;
+  background: linear-gradient(135deg, var(--accent) 0%, var(--coral) 62%, var(--peach) 100%);
+  display: grid; place-items: center; color: #1a1030; font-weight: 800; font-size: 12px; }
+.agent-badge-ring { position: absolute; inset: -5px; border-radius: 50%; border: 1.5px solid var(--accent); opacity: 0.6; animation: agent-pulse 2.2s ease-out infinite; }
+@keyframes agent-pulse { 0% { transform: scale(0.85); opacity: 0.6; } 100% { transform: scale(1.6); opacity: 0; } }
+.modal-body { transition: opacity 0.25s ease, transform 0.25s ease; }
+.modal-body.reveal-pending { opacity: 0; transform: translateY(4px); }
+.modal-body.reveal { opacity: 1; transform: none; }
 .kv { display: grid; grid-template-columns: 150px 1fr; gap: 8px 16px; margin: 14px 0 20px; font-size: 13px; }
 .kv dt { color: var(--text-muted); }
 .kv dd { margin: 0; }
