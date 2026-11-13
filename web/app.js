@@ -31,12 +31,6 @@
     }
     return el;
   }
-  const svg = (tag, attrs, ...children) => {
-    const el = document.createElementNS("http://www.w3.org/2000/svg", tag);
-    for (const [k, v] of Object.entries(attrs || {})) el.setAttribute(k, String(v));
-    for (const c of children.flat()) el.append(c instanceof Node ? c : document.createTextNode(String(c)));
-    return el;
-  };
   const fmtDate = (v) => v ? new Date(v).toLocaleDateString(undefined, { month: "short", day: "numeric", year: "numeric" }) : "—";
   const fmtTime = (v) => v ? new Date(v).toLocaleString(undefined, { month: "short", day: "numeric", hour: "numeric", minute: "2-digit" }) : "—";
   const ago = (v) => {
@@ -481,20 +475,6 @@
   }
   const tile = (label, value, sub) => h("div", { class: "card tile" }, h("div", { class: "label" }, label), h("div", { class: "value" }, value), h("div", { class: "sub" }, sub));
 
-  function trendChart(rows) {
-    const W = 600, H = 120, max = Math.max(1, ...rows.map((r) => r.open_risks));
-    const bw = W / Math.max(1, rows.length);
-    const chart = svg("svg", { class: "trend", viewBox: `0 0 ${W} ${H}`, preserveAspectRatio: "none", role: "img", "aria-label": "Open risks per day over the last 30 days" },
-      rows.map((r, i) => {
-        const bh = Math.max(2, (r.open_risks / max) * (H - 8));
-        return svg("rect", { class: "bar" + (i === rows.length - 1 ? " today" : ""), x: i * bw + 1, y: H - bh, width: Math.max(2, bw - 3), height: bh, rx: 2 },
-          svg("title", {}, `${r.day}: ${r.open_risks} open`));
-      }));
-    const last = rows[rows.length - 1];
-    return h("div", {}, chart,
-      h("div", { class: "trend-labels" }, h("span", {}, rows.length ? fmtDate(rows[0].day) : ""), h("span", {}, last ? `Today: ${last.open_risks} open` : "")));
-  }
-
   // ---------------------------------------------------------------- controls
   async function controlsView(status) {
     const columns = [
@@ -680,9 +660,18 @@
       h("td", { class: "muted" }, r.treatment),
       h("td", { class: "nowrap" }, statusBadge(r.status)),
       h("td", { class: "nowrap" }, r.status === "ready_to_close" && can.run() ? h("button", { class: "btn small primary", onclick: () => closeRiskForm(r) }, "Close risk") : null));
+    const openNow = allRisks.filter((r) => r.status !== "closed").length;
+    const ready = allRisks.filter((r) => r.status === "ready_to_close").length;
+    const highScore = allRisks.filter((r) => r.status !== "closed" && r.score >= 15).length;
+    const first = trend[0], last = trend[trend.length - 1];
     return h("div", {},
       head("Risk register", "Each risk is linked to the controls that reduce it. A risk becomes ready to close only when every linked control's latest evidence passes, and a GRC analyst closes it with a note."),
-      h("section", { class: "card gap-bottom" }, h("div", { class: "card-body" }, trendChart(trend))),
+      h("div", { class: "grid tiles gap-bottom" },
+        tile("Open risks", openNow, ready ? ready + " ready to close" : "None ready to close yet"),
+        tile("High score (15+)", highScore, "Needs the most attention"),
+        tile("30-day trend", first && last ? `${first.open_risks} → ${last.open_risks}` : "—",
+          first && last ? (last.open_risks < first.open_risks ? "Falling over the last 30 days"
+            : last.open_risks > first.open_risks ? "Rising over the last 30 days" : "Flat over the last 30 days") : "No trend data yet")),
       h("section", { class: "card" }, dataTable(columns, allRisks, renderRow, {
         placeholder: "Filter by risk, owner, status…",
         searchText: (r) => [r.id, r.title, r.owner_name, r.status, r.treatment].filter(Boolean).join(" "),
