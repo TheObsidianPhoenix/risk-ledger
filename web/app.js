@@ -104,6 +104,9 @@
   const db = {
     select: (table, query) => http(`/rest/v1/${table}?${query || "select=*"}`),
     rpc: (fn, args) => http(`/rest/v1/rpc/${fn}`, { method: "POST", body: args || {} }),
+    // Fire-and-forget: a sign-in, a page view or a record opened should never block
+    // the thing the person is actually doing, so a logging hiccup is swallowed, not surfaced.
+    logActivity: (action, view, detail) => { db.rpc("log_activity", { p_action: action, p_view: view || null, p_detail: detail || null }).catch(() => {}); },
     async update(table, filter, values) {
       const rows = await http(`/rest/v1/${table}?${filter}`, { method: "PATCH", body: values, prefer: "return=representation" });
       if (!rows || rows.length === 0) throw new Error("Not allowed: the database refused this change for your role.");
@@ -117,9 +120,11 @@
     state.skippedMfa = false;
   }
   async function signOut() {
+    db.logActivity("sign_out");   // fired while the token is still valid; must come before the session is cleared
     try { await http("/auth/v1/logout", { method: "POST" }); } catch (_) { /* already gone */ }
     saveSession(null);
     Object.assign(state, { user: null, profile: null, view: "dashboard", skippedMfa: false });
+    signInLogged = false;
     render();
   }
   const verifiedFactors = () => ((state.user && state.user.factors) || []).filter((f) => f.status === "verified" && f.factor_type === "totp");
@@ -134,9 +139,10 @@
     { id: "overview", label: "Overview", items: [["dashboard", "Dashboard"]] },
     { id: "monitoring", label: "Monitoring", items: [["controls", "Controls"], ["evidence", "Evidence"]] },
     { id: "risk", label: "Risk management", items: [["risks", "Risk register"], ["remediation", "Remediation"]] },
-    { id: "governance", label: "Governance", items: [["audit", "Audit history"]], guard: () => can.audit() },
+    { id: "governance", label: "Governance", items: [["audit", "Audit history"], ["activity", "Activity log"]], guard: () => can.audit() },
   ];
 
+  let signInLogged = false;
   async function render() {
     app.replaceChildren();
     if (!state.session) { state.session = loadSession(); }
@@ -154,9 +160,10 @@
     const rows = await db.select("profiles", "select=id,display_name,role&id=eq." + state.user.id);
     state.profile = rows[0] || { role: "pending", display_name: state.user.email };
     if (state.profile.role === "pending") return app.append(pendingView());
+    if (!signInLogged) { signInLogged = true; db.logActivity("sign_in"); db.logActivity("view", state.view); }
     app.append(await shell());
   }
-  function go(view) { state.view = view; render(); }
+  function go(view) { state.view = view; db.logActivity("view", view); render(); }
 
   // ---------------------------------------------------------------- sign-in and MFA
   function authLayout(...formChildren) {
@@ -298,7 +305,7 @@
           h("button", { class: "btn small", onclick: toggleTheme }, document.documentElement.dataset.theme === "light" ? "Dark mode" : "Light mode"),
           h("button", { class: "btn small", onclick: signOut }, "Sign out"))));
     const main = h("main", { class: "main" });
-    const views = { dashboard: dashboardView, controls: controlsView, evidence: evidenceView, remediation: remediationView, risks: risksView, audit: auditView };
+    const views = { dashboard: dashboardView, controls: controlsView, evidence: evidenceView, remediation: remediationView, risks: risksView, audit: auditView, activity: activityView };
     try {
       main.append(await (views[state.view] || dashboardView)(status));
     } catch (x) {
@@ -517,6 +524,7 @@
   }
 
   async function openControl(c) {
+    db.logActivity("view_detail", "controls", c.id);
     const evidence = await db.select("evidence", `select=*&control_id=eq.${encodeURIComponent(c.id)}&order=tested_at.desc&limit=10`).catch(() => []);
     drawer(h("div", {},
       h("div", { class: "drawer-head" }, h("div", {}, h("div", { class: "faint mono" }, c.id), h("h1", {}, c.title)), resultBadge(c.last_result)),
@@ -560,13 +568,13 @@
       { key: "tested", label: "Tested", value: (e) => new Date(e.tested_at).getTime() },
     ];
     const renderRow = (e) => h("tr", {
-      class: "clickable", onclick: () => drawer(h("div", {}, h("div", { class: "drawer-head" }, h("h1", {}, "Evidence #" + e.id), resultBadgeMuted(e.result)),
+      class: "clickable", onclick: () => { db.logActivity("view_detail", "evidence", String(e.id)); drawer(h("div", {}, h("div", { class: "drawer-head" }, h("h1", {}, "Evidence #" + e.id), resultBadgeMuted(e.result)),
         h("dl", { class: "kv" }, h("dt", {}, "Control"), h("dd", {}, e.control_id), h("dt", {}, "Test logic"), h("dd", {}, e.test_logic || "—"),
           h("dt", {}, "Where this came from"), h("dd", {}, provenanceLine(e)),
           h("dt", {}, "Source system"), h("dd", {}, e.source_system), h("dt", {}, "Snapshot"), h("dd", {}, e.snapshot_id ? "#" + e.snapshot_id : "—"),
           h("dt", {}, "Collected"), h("dd", {}, fmtTime(e.collected_at)), h("dt", {}, "Tested"), h("dd", {}, fmtTime(e.tested_at)),
           h("dt", {}, "Test run"), h("dd", {}, "#" + e.test_run_id)),
-        evidenceCard(e))),
+        evidenceCard(e))); },
     },
       h("td", { class: "mono faint" }, e.id), h("td", { class: "nowrap" }, e.control_id), h("td", {}, e.source_system),
       h("td", { class: "nowrap" }, e.source_live ? h("span", { class: "live-dot" }, "live") : h("span", { class: "faint" }, "mock")),
@@ -740,6 +748,44 @@
   function summarizeChange(a) {
     if (a.action !== "update") return a.action === "insert" ? "created" : "removed";
     return Object.entries(a.changes || {}).map(([k, v]) => `${k}: ${JSON.stringify(v.from)} → ${JSON.stringify(v.to)}`).join("; ");
+  }
+
+  // ---------------------------------------------------------------- activity log
+  const ACTIVITY_LABEL = { sign_in: "Signed in", sign_out: "Signed out", view: "Viewed page", view_detail: "Opened record" };
+  async function activityView() {
+    const rows = await db.select("activity_log", "select=*&order=id.desc&limit=200");
+    const result = h("span", {});
+    const verify = h("button", {
+      class: "btn",
+      onclick: async () => {
+        result.replaceChildren("Checking…");
+        try {
+          const out = await db.rpc("verify_activity_chain");
+          const r = Array.isArray(out) ? out[0] : out;
+          result.replaceChildren(r.first_broken_id ? h("span", { class: "badge fail" }, "Broken at row " + r.first_broken_id)
+            : h("span", { class: "badge pass" }, `Intact: ${r.rows_checked} rows verified`));
+        } catch (x) { result.replaceChildren(h("span", { class: "badge fail" }, x.message)); }
+      },
+    }, "Verify the hash chain");
+    const columns = [
+      { key: "id", label: "#" },
+      { key: "when", label: "When", value: (a) => new Date(a.at).getTime() },
+      { key: "who", label: "Who", value: (a) => a.actor_role },
+      { key: "action", label: "Action", value: (a) => ACTIVITY_LABEL[a.action] || a.action },
+      { key: "where", label: "Where", value: (a) => a.view || "" },
+      { key: "detail", label: "Record", value: (a) => a.detail || "" },
+    ];
+    const renderRow = (a) => h("tr", {},
+      h("td", { class: "mono faint" }, a.id), h("td", { class: "nowrap muted" }, fmtTime(a.at)),
+      h("td", { class: "nowrap" }, a.actor_role), h("td", {}, ACTIVITY_LABEL[a.action] || a.action),
+      h("td", { class: "nowrap" }, a.view || "—"), h("td", {}, a.detail || "—"));
+    return h("div", {},
+      head("Activity log", "Every sign-in and page view, written by the browser itself. Nobody can edit or delete it, including the database owner — the same guarantee as the audit log above, kept in its own chain so page views don't drown out actual data changes.", result, verify),
+      h("section", { class: "card" }, dataTable(columns, rows, renderRow, {
+        placeholder: "Filter by who, action, page…",
+        searchText: (a) => [a.actor_role, a.action, a.view, a.detail].filter(Boolean).join(" "),
+        defaultSort: "when", defaultDir: -1,
+      })));
   }
 
   // ---------------------------------------------------------------- drawer and theme

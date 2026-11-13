@@ -74,6 +74,35 @@ begin
   return coalesce(new, old);
 end $$;
 
+-- ---------------------------------------------------------------------------
+-- Activity log: its own hash chain, independent of audit_log's, written only
+-- through log_activity() below (never a direct insert from the client)
+-- ---------------------------------------------------------------------------
+create function public.activity_chain() returns trigger
+language plpgsql security definer set search_path = public as $$
+begin
+  perform pg_advisory_xact_lock(424243);   -- a different lock number: its own chain, its own writer lock
+  new.prev_hash := coalesce((select hash from public.activity_log order by id desc limit 1), 'genesis');
+  new.hash := encode(sha256(convert_to(new.prev_hash || '|' || new.id || '|' || extract(epoch from new.at) || '|'
+                                       || new.actor::text || '|' || new.action || '|' || coalesce(new.view, '')
+                                       || '|' || coalesce(new.detail, ''), 'UTF8')), 'hex');
+  return new;
+end $$;
+
+create trigger activity_log_chain before insert on public.activity_log
+  for each row execute function public.activity_chain();
+
+create function public.activity_log_block() returns trigger
+language plpgsql set search_path = public as $$
+begin
+  raise exception 'The activity log is append-only: % is not allowed', tg_op using errcode = '42501';
+end $$;
+
+create trigger activity_log_no_change before update or delete on public.activity_log
+  for each row execute function public.activity_log_block();
+create trigger activity_log_no_truncate before truncate on public.activity_log
+  for each statement execute function public.activity_log_block();
+
 create trigger audit_risks after insert or update or delete on public.risks for each row execute function public.audit();
 create trigger audit_controls after insert or update or delete on public.controls for each row execute function public.audit();
 create trigger audit_remediation after insert or update or delete on public.remediation for each row execute function public.audit();
@@ -194,6 +223,7 @@ alter table public.test_runs enable row level security;
 alter table public.evidence enable row level security;
 alter table public.remediation enable row level security;
 alter table public.audit_log enable row level security;
+alter table public.activity_log enable row level security;
 
 create policy "see yourself; GRC and auditors see everyone" on public.profiles for select to authenticated
   using (id = auth.uid() or public.my_role() in ('grc_analyst', 'auditor'));
@@ -221,6 +251,9 @@ create policy "GRC updates remediation; owners update their own" on public.remed
 create policy "GRC and auditors read the audit log" on public.audit_log for select to authenticated
   using (public.my_role() in ('grc_analyst', 'auditor'));
 
+create policy "GRC and auditors read the activity log" on public.activity_log for select to authenticated
+  using (public.my_role() in ('grc_analyst', 'auditor'));
+
 -- ---------------------------------------------------------------------------
 -- Grants: nothing for anonymous visitors; read-only for signed-in users, except
 -- the few columns people may change. Every other change goes through a function.
@@ -235,7 +268,8 @@ revoke execute on all functions in schema public from public, anon, authenticate
 grant execute on function public.my_role(), public.run_control_tests(), public.approve_control(text),
   public.close_risk(text, text), public.load_mock_snapshot(text, jsonb), public.verify_audit_chain(),
   public.validate_rule(jsonb, text),
-  public.propose_control(text, text, text, text, jsonb, text, text, text, int, text[], text[], text)
+  public.propose_control(text, text, text, text, jsonb, text, text, text, int, text[], text[], text),
+  public.log_activity(text, text, text), public.verify_activity_chain()
   to authenticated;
 
 -- Keep future objects closed by default, too

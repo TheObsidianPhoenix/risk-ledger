@@ -132,6 +132,32 @@ begin;
   reset role;
 rollback;
 
+-- ---------------- Activity log: sign-ins and page views, written only through log_activity() ----------------
+set role authenticated; select set_config('request.jwt.claim.sub', '00000000-0000-0000-0000-0000000000b2', false);   -- Priya, control owner
+select public.log_activity('sign_in');
+select public.log_activity('view', 'dashboard');
+select public.log_activity('view_detail', 'controls', 'CC-04');
+select t.check('owner: can''t read the activity log', (select count(*) = 0 from public.activity_log));
+select t.check('owner: can''t insert into the activity log directly', t.refused('insert into public.activity_log (actor, actor_role, action) values (auth.uid(), ''control_owner'', ''sign_in'')'));
+reset role;
+
+set role authenticated; select set_config('request.jwt.claim.sub', '00000000-0000-0000-0000-0000000000c3', false);   -- auditor
+select t.check('auditor: reads the activity log', (select count(*) = 3 from public.activity_log));
+select t.check('auditor: activity chain verifies', (select first_broken_id is null and rows_checked = 3 from public.verify_activity_chain()));
+select t.check('auditor: can''t write to the activity log directly', t.refused('insert into public.activity_log (actor, actor_role, action) values (auth.uid(), ''auditor'', ''sign_in'')'));
+reset role;
+
+select t.check('owner role: can''t update the activity log', t.refused('update public.activity_log set action = ''sign_out'''));
+select t.check('owner role: can''t delete the activity log', t.refused('delete from public.activity_log'));
+select t.check('owner role: can''t truncate the activity log', t.refused('truncate public.activity_log'));
+begin;
+  alter table public.activity_log disable trigger activity_log_no_change;
+  update public.activity_log set detail = 'tampered' where id = 2;
+  set role authenticated; select set_config('request.jwt.claim.sub', '00000000-0000-0000-0000-0000000000c3', true);
+  select t.check('tampering: activity chain verification finds the edited row', (select first_broken_id = 2 from public.verify_activity_chain()));
+  reset role;
+rollback;
+
 -- ---------------- Fixes are proven by evidence, and the register shrinks ----------------
 insert into auth.mfa_factors (user_id, status) values ('00000000-0000-0000-0000-0000000000a1', 'verified');
 set role authenticated; select set_config('request.jwt.claim.sub', '00000000-0000-0000-0000-0000000000a1', false);
