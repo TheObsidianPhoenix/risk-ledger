@@ -119,7 +119,9 @@
     saveSession(null);
     Object.assign(state, { user: null, profile: null, view: "dashboard", skippedMfa: false, complianceReminders: null });
     signInLogged = false;
-    complianceModalShown = false;
+    corvusMounted = false; corvusExpanded = false; corvusGreeted = false;
+    closeDrawer();
+    const dock = document.getElementById("corvus-dock"); if (dock) dock.remove();
     render();
   }
   const verifiedFactors = () => ((state.user && state.user.factors) || []).filter((f) => f.status === "verified" && f.factor_type === "totp");
@@ -138,6 +140,7 @@
   ];
 
   let signInLogged = false;
+  let corvusMounted = false;
   state.complianceReminders = null;   // null = not scanned yet this session; [] = scanned, nothing pending
   async function runComplianceScan() {
     try {
@@ -169,9 +172,12 @@
       if (can.audit()) await runComplianceScan();   // the compliance agent greets grc_analyst/auditor at sign-in
     }
     app.append(await shell());
-    if (can.audit() && !complianceModalShown && state.complianceReminders && state.complianceReminders.length) {
-      complianceModalShown = true;
-      complianceAgentModal();   // pops up over whatever page loads first, not a dashboard card
+    if (can.audit() && state.complianceReminders) {
+      if (!corvusMounted) {
+        corvusMounted = true;
+        corvusExpanded = state.complianceReminders.length > 0;   // auto-opens only when there's something to flag
+      }
+      corvusDock();   // docked bottom-right, not a dashboard card and not a blocking modal
     }
   }
   function go(view) { state.view = view; db.logActivity("view", view); render(); }
@@ -314,7 +320,7 @@
           claims().aal === "aal2" ? h("span", { class: "badge pass gap-left" }, "MFA") : h("span", { class: "badge warn gap-left" }, "No MFA")),
         h("div", { class: "actions" },
           can.audit() && state.complianceReminders && state.complianceReminders.length
-            ? h("button", { class: "btn small", onclick: () => complianceAgentModal() }, "Compliance agent (" + state.complianceReminders.length + ")")
+            ? h("button", { class: "btn small", onclick: () => { corvusExpanded = true; corvusDock(); } }, "Corvus (" + state.complianceReminders.length + ")")
             : null,
           h("button", { class: "btn small", onclick: toggleTheme }, document.documentElement.dataset.theme === "light" ? "Dark mode" : "Light mode"),
           h("button", { class: "btn small", onclick: signOut }, "Sign out"))));
@@ -497,7 +503,8 @@
 
   // ---------------------------------------------------------------- compliance agent
   const COMPLIANCE_REASON = { security_training: "Security training", policy_ack: "Policy acknowledgment" };
-  let complianceModalShown = false;
+  let corvusExpanded = false;
+  let corvusGreeted = false;
   async function refreshComplianceReminders() {
     state.complianceReminders = await db.select("compliance_reminders",
       "select=*,employees(name,email,manager_name,manager_email,department)&status=in.(drafted,edited)&order=due_date").catch(() => []);
@@ -512,25 +519,41 @@
       if (i >= text.length) { clearInterval(id); el.classList.remove("typing"); if (onDone) onDone(); }
     }, speed);
   }
-  function complianceAgentModal() {
+  // Corvus: a small, persistent corner presence rather than a dashboard card or a blocking modal.
+  // It mounts once at sign-in and stays docked bottom-right — pulsing while anything is pending,
+  // quiet once it isn't — and only ever covers its own corner of the screen.
+  function corvusDock() {
+    if (!can.audit()) return;
+    const existing = document.getElementById("corvus-dock");
+    if (existing) existing.remove();
     const reminders = state.complianceReminders || [];
+    const count = reminders.length;
     const first = ((state.profile && state.profile.display_name) || "there").split(" ")[0];
-    const greeting = reminders.length
+    const greeting = count
       ? `Hey ${first} — while you were signing in, I checked the training and policy-acknowledgment roster. `
-        + `${reminders.length} ${reminders.length === 1 ? "person's" : "people's"} compliance is lapsing in the next 30 days.`
+        + `${count} ${count === 1 ? "person's" : "people's"} compliance is lapsing in the next 30 days.`
       : `Hey ${first} — I checked the training and policy-acknowledgment roster while you were signing in. Everyone's current. Nothing for you here.`;
-    const greetEl = h("p", { class: "agent-line" });
-    const body = h("div", { class: "modal-body reveal-pending" },
-      h("div", { class: "notice" }, "A person reviews every draft. Sending is simulated here, since no email service is connected, and is recorded either way."),
-      reminders.length ? h("div", { class: "compliance-items" }, reminders.map(complianceReminderRow))
-        : h("div", { class: "empty" }, "All clear — nothing to review."));
-    modal(h("div", {},
-      h("div", { class: "modal-head" },
-        h("div", { class: "agent-badge" }, h("span", { class: "agent-badge-ring" }), "AI"),
-        h("div", { class: "modal-head-text" }, h("h1", {}, "Compliance agent"), greetEl),
-        h("button", { class: "btn small", onclick: closeDrawer, "aria-label": "Close" }, "Close")),
-      body));
-    typeInto(greetEl, greeting, 15, () => { body.classList.remove("reveal-pending"); body.classList.add("reveal"); });
+    const badge = h("button", {
+      class: "corvus-badge" + (count ? " urgent" : ""), "aria-label": "Open Corvus",
+      onclick: () => { corvusExpanded = !corvusExpanded; corvusDock(); },
+    }, h("span", { class: "agent-badge-ring" }), "🐦‍⬛", count ? h("span", { class: "corvus-count" }, String(count)) : null);
+    const children = [badge];
+    if (corvusExpanded) {
+      const greetEl = h("p", { class: "agent-line" });
+      const body = h("div", { class: "modal-body reveal-pending" },
+        h("div", { class: "notice" }, "A person reviews every draft. Sending is simulated here, since no email service is connected, and is recorded either way."),
+        count ? h("div", { class: "compliance-items" }, reminders.map(complianceReminderRow))
+          : h("div", { class: "empty" }, "All clear — nothing to review."));
+      children.push(h("div", { class: "corvus-panel" },
+        h("div", { class: "modal-head" },
+          h("div", { class: "agent-badge" }, h("span", { class: "agent-badge-ring" }), "🐦‍⬛"),
+          h("div", { class: "modal-head-text" }, h("h1", {}, "Corvus"), greetEl),
+          h("button", { class: "btn small", "aria-label": "Minimize", onclick: () => { corvusExpanded = false; corvusDock(); } }, "Minimize")),
+        body));
+      if (corvusGreeted) { greetEl.textContent = greeting; body.classList.remove("reveal-pending"); body.classList.add("reveal"); }
+      else { typeInto(greetEl, greeting, 15, () => { body.classList.remove("reveal-pending"); body.classList.add("reveal"); corvusGreeted = true; }); }
+    }
+    document.body.append(h("div", { class: "corvus-dock", id: "corvus-dock" }, ...children));
   }
   function complianceReminderRow(r) {
     const emp = r.employees || {};
@@ -546,11 +569,11 @@
         h("button", { class: "btn small", onclick: () => dismissComplianceReminder(r) }, "Dismiss")));
   }
   async function sendComplianceReminderAsIs(r) {
-    try { await db.rpc("send_compliance_reminder", { p_id: r.id }); toast("Sent (simulated) — recorded in the audit log."); await refreshComplianceReminders(); complianceAgentModal(); render(); }
+    try { await db.rpc("send_compliance_reminder", { p_id: r.id }); toast("Sent (simulated) — recorded in the audit log."); await refreshComplianceReminders(); closeDrawer(); corvusDock(); render(); }
     catch (x) { toast(x.message, true); }
   }
   async function dismissComplianceReminder(r) {
-    try { await db.rpc("dismiss_compliance_reminder", { p_id: r.id }); toast("Dismissed."); await refreshComplianceReminders(); complianceAgentModal(); render(); }
+    try { await db.rpc("dismiss_compliance_reminder", { p_id: r.id }); toast("Dismissed."); await refreshComplianceReminders(); closeDrawer(); corvusDock(); render(); }
     catch (x) { toast(x.message, true); }
   }
   function complianceReminderDrawer(r) {
@@ -564,13 +587,13 @@
         if (thenSend) await db.rpc("send_compliance_reminder", { p_id: r.id });
         await refreshComplianceReminders();
         toast(thenSend ? "Sent (simulated) — recorded in the audit log." : "Edits saved.");
-        complianceAgentModal(); render();
+        closeDrawer(); corvusDock(); render();
       } catch (x) { err.hidden = false; err.textContent = x.message; }
     };
     drawer(h("div", {},
       h("div", { class: "drawer-head" }, h("div", {}, h("div", { class: "faint mono" }, COMPLIANCE_REASON[r.reason]), h("h1", {}, emp.name || "Reminder")), null),
       h("p", { class: "muted gap-bottom" }, "Due " + fmtDate(r.due_date) + " · " + (emp.email || "") + " · manager " + (emp.manager_name || "—") + " (" + (emp.manager_email || "") + ")"),
-      h("div", { class: "notice" }, "Drafted by the compliance agent, not sent. There's no email service connected in this demo, so “send” is simulated and recorded as such."),
+      h("div", { class: "notice" }, "Drafted by Corvus, not sent. There's no email service connected in this demo, so “send” is simulated and recorded as such."),
       err,
       h("div", { class: "field" }, h("label", { for: "csubject" }, "Subject"), subject),
       h("div", { class: "field" }, h("label", { for: "cbody" }, "Body"), body),
@@ -578,7 +601,7 @@
         h("button", { class: "btn", type: "button", onclick: () => save(false) }, "Save edits"),
         h("button", { class: "btn primary", type: "button", onclick: () => save(true) }, "Save & send now (simulated)"),
         h("button", { class: "btn", type: "button", onclick: () => dismissComplianceReminder(r) }, "Dismiss"),
-        h("button", { class: "btn", type: "button", onclick: () => complianceAgentModal() }, "Back"))));
+        h("button", { class: "btn", type: "button", onclick: () => { closeDrawer(); corvusDock(); } }, "Back"))));
   }
 
   // ----------------------------------------------- cross-team remediation (labeled demo)
@@ -930,13 +953,11 @@
     document.body.append(back);
   }
   function closeDrawer() { const d = document.getElementById("drawer"); if (d) d.remove(); }
-  function modal(content) {
-    closeDrawer();
-    const back = h("div", { class: "backdrop modal-backdrop", id: "drawer", onclick: (e) => { if (e.target === back) closeDrawer(); } },
-      h("div", { class: "modal-card", role: "dialog", "aria-modal": "true" }, content));
-    document.body.append(back);
-  }
-  document.addEventListener("keydown", (e) => { if (e.key === "Escape") closeDrawer(); });
+  document.addEventListener("keydown", (e) => {
+    if (e.key !== "Escape") return;
+    if (document.getElementById("drawer")) return closeDrawer();
+    if (corvusExpanded) { corvusExpanded = false; corvusDock(); }
+  });
 
   // Light (the pastel phoenix) is the default; dark is an option a viewer can switch to
   function applyTheme(t) { if (t === "dark") delete document.documentElement.dataset.theme; else document.documentElement.dataset.theme = "light"; }

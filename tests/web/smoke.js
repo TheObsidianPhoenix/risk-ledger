@@ -144,20 +144,20 @@ function serve() {
     await page.fill("#code", "123456"); await page.click("button[type=submit]");
     await see("Control health"); await see("Controls passing"); await see("8/12");
   });
-  await step("compliance agent panel greets with drafts", async () => {
-    await see("Compliance agent"); await see("Morgan Reyes"); await see("Diego Fernandez");
+  await step("Corvus panel greets with drafts", async () => {
+    await see("Corvus"); await see("Morgan Reyes"); await see("Diego Fernandez");
   });
-  await step("compliance agent: edit and send a draft", async () => {
+  await step("Corvus: edit and send a draft", async () => {
     await page.locator(".compliance-item", { hasText: "Diego Fernandez" }).getByText("Review / edit").click();
     await see("Save & send now");
     await page.fill("#csubject", "Edited: policy ack due soon");
     await page.click("text=Save & send now (simulated)");
     await see("Sent (simulated)");
   });
-  await step("compliance agent: dismiss the remaining draft", async () => {
+  await step("Corvus: dismiss the remaining draft", async () => {
     await page.locator(".compliance-item", { hasText: "Morgan Reyes" }).getByText("Dismiss").click();
     await see("All clear");
-    await page.getByRole("button", { name: "Close" }).click();
+    await page.getByRole("button", { name: "Minimize" }).click();
   });
   await step("run tests", async () => { await page.click("text=Run tests now"); await see("Test run complete"); });
   await step("controls table", async () => { await page.click("nav >> text=Controls"); await see("SB-04"); await see("SOC 2"); });
