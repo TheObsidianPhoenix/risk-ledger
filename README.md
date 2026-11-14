@@ -15,7 +15,7 @@ Source systems ──► Control tests ──► Evidence ──► Remediation 
                                     every change ──► hash-chained audit log
 ```
 
-- **Twelve controls** across eight source systems. Seven systems are **mock** data shaped like their real APIs (AWS, Google Cloud, Okta, Google Workspace, an HR system, security training, vendor management). **Supabase itself is live**: four checks read this database directly: Row Level Security on every table, **no policy that opens a table to everyone** (the pattern behind CVE-2025-48757), the audit log can't be altered, and GRC analysts use MFA.
+- **Thirteen controls** across nine source systems. Eight systems are **mock** data shaped like their real APIs (AWS, Google Cloud, Okta, Google Workspace, an HR system, security training, vendor management, a vulnerability scanner). **Supabase itself is live**: four checks read this database directly: Row Level Security on every table, **no policy that opens a table to everyone** (the pattern behind CVE-2025-48757), the audit log can't be altered, and GRC analysts use MFA.
 - **Every control says how it lowers risk.** "How does this actually lower risk?" is the first question to ask about any control, so it's a required field.
 - **A failed test opens remediation work** for the control's owner, due in 7 to 60 days by severity. **Only passing evidence can close it.** Nobody can mark a fix done by hand.
 - **Risks follow their controls.** A risk becomes *ready to close* only when every linked control's latest evidence passes, and a GRC analyst closes it with a note. The trend view shows the register shrinking.
@@ -52,7 +52,7 @@ That's what makes **AI-drafted tests** safe: an assistant turns a plain-English 
 
 ## Tests
 
-`tests/run.sh` builds the database on plain Postgres (with a small stand-in for Supabase's `auth` schema) and runs **74 checks** acting as each role: anonymous, pending, GRC analyst, two control owners and an auditor. They cover access control (including one owner trying to read another's work), workflow rules, evidence-driven closure, risk acceptance expiry, audit-chain tamper detection, AI-draft validation and the live checks. Removing a guard or a Row Level Security policy makes them fail.
+`tests/run.sh` builds the database on plain Postgres (with a small stand-in for Supabase's `auth` schema) and runs **100 checks** acting as each role: anonymous, pending, GRC analyst, two control owners and an auditor. They cover access control (including one owner trying to read another's work), workflow rules, evidence-driven closure, risk acceptance expiry, audit-chain tamper detection, AI-draft validation and the live checks. Removing a guard or a Row Level Security policy makes them fail.
 
 ```bash
 PGHOST=/tmp PGPORT=54329 PGUSER=postgres ./tests/run.sh
