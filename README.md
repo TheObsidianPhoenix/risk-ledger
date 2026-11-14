@@ -52,7 +52,7 @@ That's what makes **AI-drafted tests** safe: an assistant turns a plain-English 
 
 ## Tests
 
-`tests/run.sh` builds the database on plain Postgres (with a small stand-in for Supabase's `auth` schema) and runs **100 checks** acting as each role: anonymous, pending, GRC analyst, two control owners and an auditor. They cover access control (including one owner trying to read another's work), workflow rules, evidence-driven closure, risk acceptance expiry, audit-chain tamper detection, AI-draft validation and the live checks. Removing a guard or a Row Level Security policy makes them fail.
+`tests/run.sh` builds the database on plain Postgres (with a small stand-in for Supabase's `auth` schema) and runs **106 checks** acting as each role: anonymous, pending, GRC analyst, two control owners and an auditor. They cover access control (including one owner trying to read another's work), workflow rules, evidence-driven closure, risk acceptance expiry, audit-chain tamper detection, AI-draft validation and the live checks. Removing a guard or a Row Level Security policy makes them fail.
 
 ```bash
 PGHOST=/tmp PGPORT=54329 PGUSER=postgres ./tests/run.sh

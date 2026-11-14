@@ -244,10 +244,12 @@ select t.check('scan: a draft names the manager', (select body like '%Dana Whitf
                                                       where e.name = 'Morgan Reyes'));
 select t.check('scan: re-running does not duplicate drafts', (select public.scan_compliance_lapses() = 0));
 select t.check('scan: the scan itself is logged', (select count(*) > 0 from public.activity_log where action = 'scan' and view = 'compliance_agent'));
+select t.check('scan: the activity row names the actual person, not just the role', (select count(*) > 0 from public.activity_log where action = 'scan' and actor_name = 'Jasmine'));
 
 select public.edit_compliance_reminder((select id from public.compliance_reminders where status = 'drafted' limit 1), 'Edited subject', 'Edited body');
 select t.check('edit: reminder marked edited', (select count(*) = 1 from public.compliance_reminders where subject = 'Edited subject' and status = 'edited'));
 select t.check('edit: shows up in the audit log', (select count(*) > 0 from public.audit_log where table_name = 'compliance_reminders' and action = 'update'));
+select t.check('edit: audit row names the actual person, not just the role', (select count(*) > 0 from public.audit_log where table_name = 'compliance_reminders' and action = 'update' and actor_name = 'Jasmine'));
 
 select public.dismiss_compliance_reminder((select id from public.compliance_reminders where status = 'edited' limit 1));
 select t.check('dismiss: reminder marked dismissed', (select count(*) = 1 from public.compliance_reminders where status = 'dismissed'));
@@ -260,6 +262,10 @@ reset role;
 
 set role authenticated; select set_config('request.jwt.claim.sub', '00000000-0000-0000-0000-0000000000c3', false);   -- auditor
 select t.check('auditor: reads the employee roster and the reminders', (select count(*) from public.employees) > 0 and (select count(*) from public.compliance_reminders) = 3);
+select t.check('auditor: can''t run the compliance scan', t.refused('select public.scan_compliance_lapses()'));
+select t.check('auditor: can''t edit a reminder', t.refused(format('select public.edit_compliance_reminder(%s, ''x'', ''y'')', (select id from public.compliance_reminders where status = 'drafted' limit 1))));
+select t.check('auditor: can''t send a reminder', t.refused(format('select public.send_compliance_reminder(%s)', (select id from public.compliance_reminders where status = 'drafted' limit 1))));
+select t.check('auditor: can''t dismiss a reminder', t.refused(format('select public.dismiss_compliance_reminder(%s)', (select id from public.compliance_reminders where status = 'drafted' limit 1))));
 reset role;
 
 -- ---------------- Cross-team remediation routing ----------------

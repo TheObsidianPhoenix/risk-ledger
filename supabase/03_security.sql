@@ -66,10 +66,13 @@ begin
     rec := to_jsonb(old);
     diff := rec;
   end if;
-  insert into public.audit_log (actor, actor_role, action, table_name, row_id, changes)
+  insert into public.audit_log (actor, actor_role, actor_name, action, table_name, row_id, changes)
   values (auth.uid(),
           case when auth.uid() is null then 'system' else public.my_role()::text end
             || case when current_setting('risk_ledger.engine', true) = 'on' then ' via engine' else '' end,
+          -- Looked up here, server-side, from the signed-in user's own profile row -- never
+          -- taken from anything the client sends, so it can't be spoofed by a crafted request.
+          coalesce((select display_name from public.profiles where id = auth.uid()), 'system'),
           lower(tg_op), tg_table_name, rec ->> 'id', diff);
   return coalesce(new, old);
 end $$;

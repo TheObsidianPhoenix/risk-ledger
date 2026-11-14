@@ -904,21 +904,22 @@
     const columns = [
       { key: "id", label: "#" },
       { key: "when", label: "When", value: (a) => new Date(a.at).getTime() },
-      { key: "who", label: "Who", value: (a) => a.actor_role },
+      { key: "who", label: "Who", value: (a) => a.actor_name || a.actor_role },
       { key: "action", label: "Action" },
       { key: "record", label: "Record", value: (a) => a.table_name + " " + a.row_id },
       { key: "change", label: "Change", sortable: false },
     ];
     const renderRow = (a) => h("tr", {},
       h("td", { class: "mono faint" }, a.id), h("td", { class: "nowrap muted" }, fmtTime(a.at)),
-      h("td", { class: "nowrap" }, a.actor_role), h("td", {}, a.action),
+      h("td", { class: "nowrap" }, a.actor_name ? h("span", {}, a.actor_name, h("span", { class: "muted" }, " (" + a.actor_role + ")")) : a.actor_role),
+      h("td", {}, a.action),
       h("td", { class: "nowrap" }, a.table_name + " " + a.row_id),
       h("td", { class: "mono clip" }, summarizeChange(a)));
     return h("div", {},
       head("Audit history", "Every change, by whom and when. Append-only: updates, deletes and truncation are blocked, and each row carries a hash of the one before it.", result, verify),
       h("section", { class: "card" }, dataTable(columns, rows, renderRow, {
         placeholder: "Filter by who, action, record…",
-        searchText: (a) => [a.actor_role, a.action, a.table_name, String(a.row_id)].filter(Boolean).join(" "),
+        searchText: (a) => [a.actor_name, a.actor_role, a.action, a.table_name, String(a.row_id)].filter(Boolean).join(" "),
         defaultSort: "when", defaultDir: -1,
       })));
   }
@@ -947,20 +948,21 @@
     const columns = [
       { key: "id", label: "#" },
       { key: "when", label: "When", value: (a) => new Date(a.at).getTime() },
-      { key: "who", label: "Who", value: (a) => a.actor_role },
+      { key: "who", label: "Who", value: (a) => a.actor_name || a.actor_role },
       { key: "action", label: "Action", value: (a) => ACTIVITY_LABEL[a.action] || a.action },
       { key: "where", label: "Where", value: (a) => a.view || "" },
       { key: "detail", label: "Record", value: (a) => a.detail || "" },
     ];
     const renderRow = (a) => h("tr", {},
       h("td", { class: "mono faint" }, a.id), h("td", { class: "nowrap muted" }, fmtTime(a.at)),
-      h("td", { class: "nowrap" }, a.actor_role), h("td", {}, ACTIVITY_LABEL[a.action] || a.action),
+      h("td", { class: "nowrap" }, a.actor_name ? h("span", {}, a.actor_name, h("span", { class: "muted" }, " (" + a.actor_role + ")")) : a.actor_role),
+      h("td", {}, ACTIVITY_LABEL[a.action] || a.action),
       h("td", { class: "nowrap" }, a.view || "—"), h("td", {}, a.detail || "—"));
     return h("div", {},
       head("Activity log", "Every sign-in and page view, written by the browser itself. Nobody can edit or delete it, including the database owner — the same guarantee as the audit log above, kept in its own chain so page views don't drown out actual data changes.", result, verify),
       h("section", { class: "card" }, dataTable(columns, rows, renderRow, {
         placeholder: "Filter by who, action, page…",
-        searchText: (a) => [a.actor_role, a.action, a.view, a.detail].filter(Boolean).join(" "),
+        searchText: (a) => [a.actor_name, a.actor_role, a.action, a.view, a.detail].filter(Boolean).join(" "),
         defaultSort: "when", defaultDir: -1,
       })));
   }
