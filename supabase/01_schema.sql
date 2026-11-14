@@ -141,6 +141,7 @@ create table public.audit_log (
   at         timestamptz not null default clock_timestamp(),
   actor      uuid,
   actor_role text not null,
+  actor_name text not null default '',
   action     text not null,
   table_name text not null,
   row_id     text not null,
@@ -149,6 +150,7 @@ create table public.audit_log (
   hash       text not null
 );
 comment on table public.audit_log is 'Every change to the ledger. Triggers block updates, deletes and truncation; each row carries a hash of the one before it.';
+comment on column public.audit_log.actor_name is 'Display name at the time of the action, looked up server-side from profiles by the trigger -- never client-submitted. For display only: it is not part of the hash, so the actor uuid (actor) plus the hash chain, not this column, is what proves nothing was altered.';
 
 -- ---------------------------------------------------------------------------
 -- Activity log: a separate hash-chained trail of sign-ins and page views, so
@@ -159,6 +161,7 @@ create table public.activity_log (
   at         timestamptz not null default clock_timestamp(),
   actor      uuid not null references auth.users(id),
   actor_role text not null,
+  actor_name text not null default '',
   action     text not null check (action in ('sign_in', 'sign_out', 'view', 'view_detail', 'scan')),
   view       text check (char_length(view) <= 40),
   detail     text check (char_length(detail) <= 200),

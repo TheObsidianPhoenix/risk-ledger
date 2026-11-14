@@ -146,6 +146,7 @@ create table public.audit_log (
   at         timestamptz not null default clock_timestamp(),
   actor      uuid,
   actor_role text not null,
+  actor_name text not null default '',
   action     text not null,
   table_name text not null,
   row_id     text not null,
@@ -154,6 +155,7 @@ create table public.audit_log (
   hash       text not null
 );
 comment on table public.audit_log is 'Every change to the ledger. Triggers block updates, deletes and truncation; each row carries a hash of the one before it.';
+comment on column public.audit_log.actor_name is 'Display name at the time of the action, looked up server-side from profiles by the trigger -- never client-submitted. For display only: it is not part of the hash, so the actor uuid (actor) plus the hash chain, not this column, is what proves nothing was altered.';
 
 -- ---------------------------------------------------------------------------
 -- Activity log: a separate hash-chained trail of sign-ins and page views, so
@@ -164,6 +166,7 @@ create table public.activity_log (
   at         timestamptz not null default clock_timestamp(),
   actor      uuid not null references auth.users(id),
   actor_role text not null,
+  actor_name text not null default '',
   action     text not null check (action in ('sign_in', 'sign_out', 'view', 'view_detail', 'scan')),
   view       text check (char_length(view) <= 40),
   detail     text check (char_length(detail) <= 200),
@@ -630,8 +633,10 @@ create function public.log_activity(p_action text, p_view text default null, p_d
 language plpgsql volatile security definer set search_path = public as $$
 begin
   if auth.uid() is null then return; end if;
-  insert into public.activity_log (actor, actor_role, action, view, detail)
-  values (auth.uid(), public.my_role()::text, p_action, p_view, p_detail);
+  insert into public.activity_log (actor, actor_role, actor_name, action, view, detail)
+  values (auth.uid(), public.my_role()::text,
+          coalesce((select display_name from public.profiles where id = auth.uid()), ''),
+          p_action, p_view, p_detail);
 end $$;
 
 -- ---------------------------------------------------------------------------
@@ -656,7 +661,9 @@ language plpgsql volatile security definer set search_path = public as $$
 declare
   e record; t record; drafted int := 0;
 begin
-  perform public.require_role(array['grc_analyst', 'auditor']::public.app_role[]);
+  -- Drafting, editing, sending and dismissing are all operational actions, not read access;
+  -- the auditor role stays read-only here, same as everywhere else in the app.
+  perform public.require_role(array['grc_analyst']::public.app_role[]);
   for e in select * from public.employees where training_due_at <= current_date + 30 loop
     select * into t from public.draft_reminder_text(e.name, 'security_training', e.training_due_at, e.manager_name);
     insert into public.compliance_reminders (employee_id, reason, due_date, subject, body)
@@ -681,7 +688,7 @@ create function public.edit_compliance_reminder(p_id bigint, p_subject text, p_b
 language plpgsql volatile security definer set search_path = public as $$
 declare r record;
 begin
-  perform public.require_role(array['grc_analyst', 'auditor']::public.app_role[]);
+  perform public.require_role(array['grc_analyst']::public.app_role[]);
   select * into r from public.compliance_reminders where id = p_id for update;
   if r is null then raise exception 'No reminder %', p_id; end if;
   if r.status in ('sent', 'dismissed') then raise exception 'This reminder is already %, and can''t be edited', r.status; end if;
@@ -694,7 +701,7 @@ create function public.send_compliance_reminder(p_id bigint) returns void
 language plpgsql volatile security definer set search_path = public as $$
 declare r record;
 begin
-  perform public.require_role(array['grc_analyst', 'auditor']::public.app_role[]);
+  perform public.require_role(array['grc_analyst']::public.app_role[]);
   select * into r from public.compliance_reminders where id = p_id for update;
   if r is null then raise exception 'No reminder %', p_id; end if;
   if r.status in ('sent', 'dismissed') then raise exception 'This reminder is already %', r.status; end if;
@@ -706,7 +713,7 @@ create function public.dismiss_compliance_reminder(p_id bigint) returns void
 language plpgsql volatile security definer set search_path = public as $$
 declare r record;
 begin
-  perform public.require_role(array['grc_analyst', 'auditor']::public.app_role[]);
+  perform public.require_role(array['grc_analyst']::public.app_role[]);
   select * into r from public.compliance_reminders where id = p_id for update;
   if r is null then raise exception 'No reminder %', p_id; end if;
   if r.status in ('sent', 'dismissed') then raise exception 'This reminder is already %', r.status; end if;
@@ -802,10 +809,13 @@ begin
     rec := to_jsonb(old);
     diff := rec;
   end if;
-  insert into public.audit_log (actor, actor_role, action, table_name, row_id, changes)
+  insert into public.audit_log (actor, actor_role, actor_name, action, table_name, row_id, changes)
   values (auth.uid(),
           case when auth.uid() is null then 'system' else public.my_role()::text end
             || case when current_setting('risk_ledger.engine', true) = 'on' then ' via engine' else '' end,
+          -- Looked up here, server-side, from the signed-in user's own profile row -- never
+          -- taken from anything the client sends, so it can't be spoofed by a crafted request.
+          coalesce((select display_name from public.profiles where id = auth.uid()), 'system'),
           lower(tg_op), tg_table_name, rec ->> 'id', diff);
   return coalesce(new, old);
 end $$;
