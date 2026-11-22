@@ -1,0 +1,19 @@
+# Keeps GitHub Actions versions current. Actions in this repo are pinned to exact
+# commit hashes (see pages.yml, daily-check.yml) so a compromised tag can't change
+# what runs; Dependabot still needs to tell us when a pinned action has a newer,
+# reviewable version to pin to instead.
+#
+# Note: there's no package.json/requirements.txt in this repo to track as a second
+# ecosystem. The one pinned non-Action dependency (Playwright, used only in CI for
+# the browser smoke test) is version-pinned inline in pages.yml and isn't something
+# Dependabot can see without a manifest file. Flagged in the security gap analysis
+# as a manual watch item rather than adding a manifest just to track one line.
+version: 2
+updates:
+  - package-ecosystem: "github-actions"
+    directory: "/"
+    schedule:
+      interval: "weekly"
+    groups:
+      github-actions:
+        patterns: ["*"]

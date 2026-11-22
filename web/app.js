@@ -694,6 +694,9 @@
     const evidence = await db.select("evidence", `select=*&control_id=eq.${encodeURIComponent(c.id)}&order=tested_at.desc&limit=10`).catch(() => []);
     drawer(h("div", {},
       h("div", { class: "drawer-head" }, h("div", {}, h("div", { class: "faint mono" }, c.id), h("h1", {}, c.title)), resultBadge(c.last_result)),
+      c.drafted_by === "ai" && !c.approved_at
+        ? h("div", { class: "notice" }, "This control test was drafted by AI from a plain-English request. It is a suggestion only and has no effect until a GRC analyst reviews and approves it.")
+        : null,
       h("p", { class: "quote" }, c.risk_reduced),
       h("dl", { class: "kv" },
         h("dt", {}, "Test"), h("dd", {}, c.test_logic),
@@ -703,7 +706,7 @@
         h("dt", {}, "Owner"), h("dd", {}, c.owner_name || "—"),
         h("dt", {}, "Runs every"), h("dd", {}, c.frequency_days + (c.frequency_days === 1 ? " day" : " days")),
         h("dt", {}, "Approved"), h("dd", {}, c.approved_at ? `${c.approved_by_name} · ${fmtDate(c.approved_at)}` : "Not yet (draft)"),
-        h("dt", {}, "Drafted by"), h("dd", {}, c.drafted_by === "ai" ? "AI, reviewed and approved by a person" : "A person")),
+        h("dt", {}, "Drafted by"), h("dd", {}, c.drafted_by === "ai" ? (c.approved_at ? "AI, reviewed and approved by a person" : "AI — awaiting human review") : "A person")),
       h("h2", {}, "Evidence history"),
       evidence.length ? h("div", { class: "timeline" }, evidence.map(evidenceCard)) : h("p", { class: "muted gap-top" }, "No evidence visible to your role yet.")));
   }
