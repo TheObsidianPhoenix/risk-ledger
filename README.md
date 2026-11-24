@@ -19,7 +19,7 @@ Source systems ──► Control tests ──► Evidence ──► Remediation 
 - **Every control says how it lowers risk.** "How does this actually lower risk?" is the first question to ask about any control, so it's a required field.
 - **A failed test opens remediation work** for the control's owner, due in 7 to 60 days by severity. **Only passing evidence can close it.** Nobody can mark a fix done by hand.
 - **Risks follow their controls.** A risk becomes *ready to close* only when every linked control's latest evidence passes, and a GRC analyst closes it with a note. The trend view shows the register shrinking.
-- **It runs every day by itself.** A scheduler inside the database runs every test daily, and a separate daily check from outside (signed in as the read-only auditor) fails loudly if the schedule ever stops.
+- **It runs every day by itself.** A scheduler inside the database runs every test daily, and a separate daily check from outside (signed in as the read-only auditor) fails loudly if the schedule ever stops **or if the audit or activity log's hash chain shows any sign of tampering**.
 - **Risk acceptance expires.** An accepted gap needs a reason and an end date within 180 days; after that, the next test run reopens it.
 
 ## The web page
@@ -36,7 +36,7 @@ Source systems ──► Control tests ──► Evidence ──► Remediation 
 
 A test is a small JSON rule, such as "every Okta user marked privileged has `mfa_enabled = true`," evaluated by fixed, tested code. Six rule shapes exist: `all_match`, `none_match`, `percent_match`, `within_days`, `max_age_days` and `before_date`. A rule can only compare fields in collected evidence. It can never run SQL or code.
 
-That's what makes **AI-drafted tests** safe: an assistant turns a plain-English request into a rule, the database **validates** it (known shape, safe field names, and a collection that actually exists in the evidence), it's saved as a **draft that never runs**, and a **GRC analyst approves it** before it becomes active. The approver is recorded.
+That's what makes **AI-drafted tests** safe: an assistant turns a plain-English request into a rule, the database **validates** it (known shape, safe field names, and a collection that actually exists in the evidence), it's saved as a **draft that never runs**, and a **GRC analyst approves it** before it becomes active. The approver is recorded, and the web page shows an explicit notice on any control still awaiting that review — it's never presented as already trusted.
 
 ## Security model
 
@@ -46,13 +46,15 @@ That's what makes **AI-drafted tests** safe: an assistant turns a plain-English 
 | Row Level Security | On every table, deny by default. Two live controls watch it daily: SB-01 fails if a table without RLS appears; SB-04 fails if any policy allows every row, only checks that someone is signed in, or applies to anonymous visitors. See [why RLS gets its own controls](docs/why-rls-matters.md) |
 | Workflow rules in the database | Guard triggers enforce them even if the web page has a bug: no closing remediation by hand, no closing a risk before its evidence passes, no activating a control without approval, acceptance capped at 180 days |
 | Permanent evidence | Evidence and source snapshots can't be updated or deleted, even by the database owner |
-| Tamper-evident audit log | Every change is logged with who, when and what changed. Each row carries a hash of the one before it; `verify_audit_chain()` finds any edited row. Updates, deletes and truncation are blocked |
+| Tamper-evident audit log | Every change is logged with who, when and what changed, naming the actual person even when several people share a role. Each row carries a hash of the one before it; `verify_audit_chain()` finds any edited row. Updates, deletes and truncation are blocked |
+| Tamper-evident activity log | Logins, test runs and other non-write activity are hash-chained the same way; `verify_activity_chain()` finds any edited row. The daily check outside the database runs both checks and fails loudly on either |
 | Minimal grants | Anonymous visitors get nothing. Signed-in users can read (as RLS allows) and update only three remediation columns and a few risk fields; everything else goes through checked functions. Every function pins its `search_path` |
 | MFA | Supabase Auth with authenticator-app MFA; SB-03 fails while any GRC analyst lacks it |
+| Dependency updates | Dependabot watches GitHub Actions versions weekly and opens a pull request when one falls behind, so CI stays on supported, patched actions |
 
 ## Tests
 
-`tests/run.sh` builds the database on plain Postgres (with a small stand-in for Supabase's `auth` schema) and runs **106 checks** acting as each role: anonymous, pending, GRC analyst, two control owners and an auditor. They cover access control (including one owner trying to read another's work), workflow rules, evidence-driven closure, risk acceptance expiry, audit-chain tamper detection, AI-draft validation and the live checks. Removing a guard or a Row Level Security policy makes them fail.
+`tests/run.sh` builds the database on plain Postgres (with a small stand-in for Supabase's `auth` schema) and runs **109 checks** acting as each role: anonymous, pending, GRC analyst, two control owners and an auditor. They cover access control (including one owner trying to read another's work), workflow rules, evidence-driven closure, risk acceptance expiry, audit- and activity-chain tamper detection, that logged actions name the actual person and not just their role, AI-draft validation and the live checks. Removing a guard or a Row Level Security policy makes them fail.
 
 ```bash
 PGHOST=/tmp PGPORT=54329 PGUSER=postgres ./tests/run.sh
